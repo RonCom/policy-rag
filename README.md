@@ -180,23 +180,23 @@ labeling a fresh sample before trusting the judge's numbers again.
 In a RAG system the features are how documents and queries are represented for search, plus the signals used to
 watch it in use. Each choice below was made for a stated reason. `policy-rag ablate` then removes one at a time
 and re-scores retrieval on the same 50 answerable questions, so the "impact" column is measured rather than
-assumed. Keyword ablations need no model and are reported here. The embedding ablations re-embed the corpus and
-need Ollama; they run with `policy-rag ablate`.
+assumed. Keyword ablations need no model; embedding ablations re-embed the corpus with Ollama (about a minute
+each).
 
 ![Retrieval recall with one feature removed at a time](reports/figures/ablation.png)
 
-| Feature | What | Why | Impact when removed (keyword search, top 5) |
+| Feature | What | Why | Impact when removed (top 5 unless noted) |
 |---|---|---|---|
 | Section-aware chunks | Chunks follow the manuals' own sections, split at about 300 words | A citation must point to a section a reviewer can look up | Section-blind 300-word windows score 90% vs 88%, but that scoring is lenient (a window counts if it touches the gold section), and 34% of windows span two or more sections, so the answer can't be cited to one. **Kept for citability, not recall.** |
 | Table-of-contents check on headings | A line is a heading only if it is one of the next few contents entries | Cross-references ("see 220.2 - ...") and in-paragraph lists of titles look like headings | **88% -> 80%**: 4 questions lost, none gained (95% CI -16 to -2 points); plain language 40% -> 30%. Without it the parser finds 311 sections instead of 304, splitting and mislabeling real ones. The largest measured effect. |
 | Boilerplate removal | Drop running headers, page labels, contents lines, revision history | Text repeated on every page inflates term counts and fills chunks with noise | Not ablated on its own; heading detection depends on it. |
-| Section heading in the chunk text | "Reporting of Service Units With HCPCS. ..." | The heading names the topic in the manuals' own terms | No change at top 5; top 1 76% -> 74%. |
+| Section heading in the chunk text | "Reporting of Service Units With HCPCS. ..." | The heading names the topic in the manuals' own terms | Keyword: no change at top 5; top 1 76% -> 74%. Embedding: top 5 90% -> 92%, but top 1 drops **70% -> 58%** (MRR 0.79 -> 0.74). The heading's value is putting the right section first. |
 | Tokenizer that keeps "220.2", "g-codes" | Dotted numbers and hyphenated terms stay one token | Section numbers and codes are exact-match evidence | No change at top 5; top 10 96% -> 92%. Few test questions quote a section number, so this set can't show much. |
 | Stopwords (incl. "may", "must", "shall") | Removed before keyword scoring | Common words carry no topic | None: 1 question lost, 1 gained. |
-| Embedding task prefixes | `search_query:` / `search_document:` for `nomic-embed-text` | The model was trained with them | Embedding ablation, needs Ollama. |
+| Embedding task prefixes | `search_query:` / `search_document:` for `nomic-embed-text` | The model was trained with them | Embedding search did slightly *better* without them: 90% -> 92% (1 question gained, none lost; 95% CI 0 to +6), top 1 70% -> 74%, plain language 70% -> 80%. Within noise; top 1 and top 5 both rose, top 3 was unchanged and top 10 fell (96% -> 94%). |
 | Reciprocal rank fusion | Combine keyword and embedding rankings by rank, not score | BM25 scores and cosine similarities are on different scales; ranks need no calibration | Hybrid 92% vs BM25 88% and dense 90% (vs BM25: +4 points, 95% CI 0 to +10). |
 | Chunk size and overlap | 300 words, 40 overlap | A first guess | Tested by `policy-rag sweep`. |
-| Monitoring signals | 8 label-free per-query features (see [MLOps](#mlops-mlflow-and-evidently)) | No labels exist in use | Each must predict a retrieval miss or out-of-scope question (AUC >= 0.65) before it can flag a query. |
+| Monitoring signals | 8 label-free per-query features (see [MLOps](#mlops-mlflow-and-evidently)) | No labels exist in use | Each must predict a retrieval miss or out-of-scope question (AUC >= 0.65) before it can flag a query. All six confidence signals pass; the best embedding match is strongest (AUC 0.89 for misses, 0.97 for out-of-scope). |
 
 **What this changes.** The feature that mattered was structural: getting section boundaries right. Token-level
 choices (heading, tokenizer, stopwords) didn't move top-5 recall on this test set, so they stay as sensible
@@ -205,6 +205,12 @@ problem: a reviewer writes "sign off on the therapy plan" where the manual says 
 next feature to try is a small glossary that maps everyday terms to the manuals' vocabulary, added to the query
 before keyword search. It gets the same treatment: an ablation on the plain-language questions, after that set
 grows beyond 10.
+
+On the embedding side, two documented practices didn't pay off on top-5 recall. The section heading stays,
+because its value is at rank 1 (70% vs 58%), and hybrid fusion rewards rank. Dropping the task prefixes gained one
+question, which the selection rule treats as noise (the interval touches zero). It is still the cheapest candidate
+for the next eval run: a one-line change, to be judged through hybrid retrieval and the answers, not embedding
+recall alone.
 
 ## MLOps: MLflow and Evidently
 
@@ -267,7 +273,7 @@ HTML report as an artifact:
 3. **Tests drift** between the evaluated questions (reference) and a traffic sample (current;
    `eval/traffic_sample.jsonl` holds 30 unlabeled queries, mostly everyday wording, including topics such as
    prior authorization, DME rental and hospice that these chapters don't cover). Evidently's `DataDriftPreset`
-   picks the test per column (K-S for continuous signals, chi-square or Z-test for few-valued ones). The dataset
+   picks the test per column (K-S for the numeric signals, a Z-test for `has_code`; `sections_top5` is forced to K-S, see the control result below). The dataset
    counts as drifted only when at least half the signals drift: with 8 signals at p < 0.05, one false alarm per run
    is likely.
 4. **Builds a review queue** (`reports/monitoring/review_queue.csv`): traffic queries that fall past the reference's
@@ -277,18 +283,84 @@ That loop is how the system adapts: monitor -> review flagged queries -> add the
 `sweep` and `eval`, and the eval-set hash records that the benchmark changed. It deliberately stops short of
 automatic retraining or re-chunking: with no labels on live queries, an automatic change could only optimize a proxy.
 
-### Reading the sweep and monitoring figures
+### Results: retrieval sweep
 
-- **`reports/figures/sweep.png`**: recall at 5 for each chunk size and overlap, one line per retriever, for all
-  answerable questions (left) and plain-language ones (right). The selection rule reads the left panel. The right
-  panel is the failure mode from the results above: a setting that wins overall while losing plain-language recall
-  would be the wrong trade, and the tie-break is there to catch it.
-- **`reports/figures/monitoring_signals.png`**: each signal's AUC for a retrieval miss and for an out-of-scope
-  question on the labeled set. Only signals past the dashed 0.65 line are used to flag queries; the rest are
-  reported but don't raise flags.
-- **`reports/figures/monitoring.png`**: four signals for the evaluated questions and the traffic sample, with
-  Evidently's drift p-value for each. Read it alongside the control (half the eval set against the other half) in
-  `monitor.json`: a signal that drifts in the control at this sample size is not evidence on its own.
+![Recall at 5 by chunk size, overlap and retriever](reports/figures/sweep.png)
+
+*What it shows:* 15 settings (5 chunkings x 3 retrievers). Top-5 recall ranges from 88% to 94%, so no setting
+differs from another by more than three questions. Two patterns stand out:
+
+- **Bigger chunks help everyday wording.** Plain-language recall for embedding search rises from 70% at 300 words
+  to 80% at 800, and for hybrid from 60% to 70%.
+- **Smaller chunks rank the right section first more often.** At 150 words, hybrid puts the gold section at
+  rank 1 for 82% of questions (76% now), with MRR 0.86 (0.83 now), on half the context (about 720 words vs 1,390).
+
+Applying the rule: hybrid and keyword search at 800 words need more than the 3,000-word budget and drop out. The
+best remaining setting is 800-word chunks with embedding search, at 94%. That is +2 points over the current
+setting, with a 95% interval of -6 to +12, so the rule says **keep 300 words / 40 overlap / hybrid**. The current
+setting also reproduced its eval result exactly (92%).
+
+*What it decides:* the configuration stays. The two patterns become hypotheses for the next sweep, once the
+plain-language set is larger than ten questions:
+
+- **Larger chunks for everyday questions.** These double the text the model reads, so they need an answer-level
+  check that faithfulness holds, not just recall.
+- **150-word chunks.** These free half the context budget, which could go to more excerpts.
+
+### Results: monitoring
+
+![AUC of each signal for retrieval misses and out-of-scope questions](reports/figures/monitoring_signals.png)
+
+**Which signals earn a place.** All six confidence signals clear the 0.65 bar for at least one failure type.
+
+- `dense_top1` (the best embedding match) is the strongest on both: AUC 0.89 for retrieval misses, 0.97 for
+  out-of-scope questions.
+- Out-of-vocabulary share and the best keyword score separate out-of-scope questions well (0.92, 0.95) but
+  retrieval misses barely (0.64).
+- Keyword/embedding agreement and section scatter track misses (0.86, 0.87).
+
+The miss column rests on only 4 misses, so read it as a ranking, not a measurement. Decision: the best embedding
+match plus agreement is the confidence pair to build on, including the "decline when unsure" guard proposed above.
+
+**The control caught a bug.** On its first run, the control (two random halves of the same eval questions)
+flagged `sections_top5` at p = 2.5e-8, which is impossible for a random split. The cause: the column only takes
+the values 1-5, so Evidently tested it with chi-square. A value seen in one half and not the other gives an
+expected count of zero and a p-value near zero. The column is ordinal, so it is now tested with K-S like the other
+signals. After the fix, the control shows no drift on any signal (drift share 0), and the traffic result is
+unchanged (2 of 8 signals). Without the control, that artifact would have counted toward a drift alarm.
+
+![Signals for the evaluated questions and the traffic sample](reports/figures/monitoring.png)
+
+**Drift.** The 30 traffic queries are shorter than the eval questions (10.7 vs 14.1 words) and rarely contain a
+code (7% vs 18%). Keyword and embedding search agree less on them (0.26 vs 0.42 overlap in the top 5).
+
+- Two of eight signals drift: length (p = 0.01) and the best keyword score (p = 0.03).
+- The two strongest signals are borderline: best embedding match p = 0.065, agreement p = 0.069.
+- That is a drift share of 25%, below the 50% rule, so **no dataset alarm**.
+
+Five of the six confidence signals moved toward lower confidence. The exception is out-of-vocabulary share, because everyday words appear in the manuals too. Still, 30 queries is too few for the rule to call it. The keyword
+score also partly measures length: BM25 scores grow with query terms, and in the traffic sample it correlates
+with length (Spearman 0.34). Part of its drift just restates "queries got shorter."
+
+**Review queue.** 2 of 30 queries were flagged, both out of scope: the hospice election period (3 low signals) and
+the Part D late-enrollment penalty (2). No in-scope query was flagged. Out-of-scope questions that share therapy
+vocabulary (Medicare Advantage prior authorization for PT, telehealth PT, home-health therapy) were not flagged:
+the words match, so retrieval looks confident. Those are left to the answer step's decline (12 of 12 in the eval),
+which `monitor --answers` tracks as an abstain rate.
+
+*What it decides:*
+
+- At this volume the review queue is the useful output, not the dataset alarm.
+- Next changes:
+  1. Normalize the keyword score by the number of query terms, so it measures match quality rather than length.
+  2. With real traffic, test windows of a few hundred queries, where the drift tests have power.
+  3. Track the abstain rate for topic-adjacent out-of-scope questions.
+
+### Reproducibility
+
+Rerunning the full eval (answers, judge, calibration) reproduced every metric, and all 37 hand labels matched
+the regenerated answers word for word. Generation runs at temperature 0, so labels stay valid across reruns as
+long as the prompt and model hashes in MLflow are unchanged.
 
 Outputs: `reports/sweep.json`, `reports/figures/sweep.png`, `reports/monitoring/monitor.json`,
 `reports/figures/monitoring.png`; everything is also in MLflow (`uv run mlflow ui --backend-store-uri sqlite:///mlflow.db`).

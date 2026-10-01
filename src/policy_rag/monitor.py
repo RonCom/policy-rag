@@ -20,7 +20,7 @@ Steps:
   2. Control: split the reference in two at random and run the same drift test. That is the false-alarm level with
      these sample sizes.
   3. Drift: reference = the evaluated questions, current = a traffic sample. Evidently's DataDriftPreset (K-S test
-     for numeric columns, chi-square/Z-test for has_code at these sizes) per column; dataset drift if at least half
+     for numeric columns, including the few-valued sections_top5; Z-test for has_code) per column; dataset drift if at least half
      the columns drift, so one noisy signal doesn't raise an alarm.
   4. Flags: current queries that fall below the reference's 10th percentile on at least two useful signals go to a
      review list (one signal alone fires too often to be worth a reviewer's time). Those
@@ -93,7 +93,11 @@ def validity(ref: pd.DataFrame, qs: pd.DataFrame, idx: Index) -> dict:
 
 def drift(ref: pd.DataFrame, cur: pd.DataFrame) -> tuple[dict, object]:
     dd = DataDefinition(numerical_columns=NUMERIC, categorical_columns=["has_code"])
-    snap = Report([DataDriftPreset()]).run(current_data=Dataset.from_pandas(cur, data_definition=dd),
+    # sections_top5 takes only the values 1-5, so Evidently would pick chi-square for it. A value present in one
+    # sample and absent from the other gives an expected count of zero and p ~ 0: the control split flagged it at
+    # p = 2.5e-8. It is ordinal, so test it with K-S like the other numeric signals.
+    preset = DataDriftPreset(per_column_method={"sections_top5": "ks"})
+    snap = Report([preset]).run(current_data=Dataset.from_pandas(cur, data_definition=dd),
                                            reference_data=Dataset.from_pandas(ref, data_definition=dd))
     out = {"columns": {}}
     for m in snap.dict()["metrics"]:

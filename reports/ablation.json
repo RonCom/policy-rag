@@ -118,5 +118,65 @@
     ],
     "questions_lost": 1,
     "questions_gained": 1
+  },
+  {
+    "retriever": "dense",
+    "variant": "baseline",
+    "chunks": 851,
+    "mrr": 0.7910238095238096,
+    "recall_at_1": 0.7,
+    "recall_at_3": 0.86,
+    "recall_at_5": 0.9,
+    "recall_at_10": 0.96,
+    "recall_at_5_exact": 0.9259259259259259,
+    "recall_at_5_paraphrase": 1.0,
+    "recall_at_5_plain": 0.7,
+    "delta_recall_at_5": 0.0,
+    "delta_ci95": [
+      0.0,
+      0.0
+    ],
+    "questions_lost": 0,
+    "questions_gained": 0
+  },
+  {
+    "retriever": "dense",
+    "variant": "no_heading",
+    "chunks": 851,
+    "mrr": 0.7373809523809524,
+    "recall_at_1": 0.58,
+    "recall_at_3": 0.86,
+    "recall_at_5": 0.92,
+    "recall_at_10": 0.98,
+    "recall_at_5_exact": 0.9259259259259259,
+    "recall_at_5_paraphrase": 1.0,
+    "recall_at_5_plain": 0.8,
+    "delta_recall_at_5": 0.020000000000000018,
+    "delta_ci95": [
+      -0.06000000000000005,
+      0.10000000000000009
+    ],
+    "questions_lost": 2,
+    "questions_gained": 3
+  },
+  {
+    "retriever": "dense",
+    "variant": "no_prefixes",
+    "chunks": 851,
+    "mrr": 0.8083333333333335,
+    "recall_at_1": 0.74,
+    "recall_at_3": 0.86,
+    "recall_at_5": 0.92,
+    "recall_at_10": 0.94,
+    "recall_at_5_exact": 0.9259259259259259,
+    "recall_at_5_paraphrase": 1.0,
+    "recall_at_5_plain": 0.8,
+    "delta_recall_at_5": 0.020000000000000018,
+    "delta_ci95": [
+      0.0,
+      0.06000000000000005
+    ],
+    "questions_lost": 0,
+    "questions_gained": 1
   }
 ]

@@ -63,9 +63,9 @@
         "drifted": false
       },
       "sections_top5": {
-        "method": "chi-square p_value",
-        "p_value": 2.5496293051335527e-08,
-        "drifted": true
+        "method": "ks",
+        "p_value": 0.14742010273046638,
+        "drifted": false
       },
       "has_code": {
         "method": "Z-test p_value",
@@ -73,8 +73,8 @@
         "drifted": false
       }
     },
-    "drifted_columns": 1,
-    "drift_share": 0.125,
+    "drifted_columns": 0,
+    "drift_share": 0.0,
     "dataset_drift": false
   },
   "drift": {
@@ -110,8 +110,8 @@
         "drifted": false
       },
       "sections_top5": {
-        "method": "chi-square p_value",
-        "p_value": 0.2656158535266853,
+        "method": "ks",
+        "p_value": 0.780990819926627,
         "drifted": false
       },
       "has_code": {
