@@ -7,6 +7,7 @@ authors = [{ name = "Chris Lavelle" }]
 requires-python = ">=3.12"
 dependencies = [
     "duckdb>=1.1",
+    "evidently>=0.7,<0.8",
     "matplotlib>=3.8",
     "mlflow>=2.16",
     "numpy>=1.26",

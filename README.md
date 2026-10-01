@@ -34,7 +34,7 @@ Save the four PDFs to `data/docs/` (git-ignored).
    Vectors live in DuckDB.
 3. **Grounded answers** (`answer.py`): a local model answers only from the numbered excerpts, cites each claim
    `[n]`, and replies `NOT IN DOCUMENTS` when the excerpts don't cover the question.
-4. **Evaluation** (`evaluate.py`), on 52 questions in `eval/questions.jsonl`: 40 answerable, each with a reference
+4. **Evaluation** (`evaluate.py`), on 62 questions in `eval/questions.jsonl`: 50 answerable, each with a reference
    answer, key facts and gold manual sections, and 12 that the corpus does not answer (Part D penalties, MS-DRG
    weights, MIPS thresholds…). For each question it records:
    - **retrieval:** recall@k and MRR for each retriever, with paired bootstrap intervals;
@@ -45,10 +45,15 @@ Save the four PDFs to `data/docs/` (git-ignored).
    - **closed-book baseline:** the same model with no excerpts, to show what retrieval adds and how often the
      model invents an answer.
 
-   Runs are logged to MLflow.
+   Runs are logged to MLflow, and each answer is an MLflow trace (see [MLOps](#mlops-mlflow-and-evidently)).
 5. **Judge calibration** (`policy-rag calibrate`): an LLM judge is only useful if it agrees with a person. `eval`
    writes `eval/human_labels.csv`; label a sample yourself (`human_correct` 0/0.5/1, `human_faithful` 0/1) and
    `calibrate` reports agreement and Cohen's kappa.
+6. **Retrieval sweep** (`sweep.py`): chunk size x overlap x retriever, as nested MLflow runs, with a selection rule
+   stated before the run.
+7. **Feature ablation** (`ablation.py`): removes one retrieval feature at a time to measure what each is worth.
+8. **Monitoring** (`monitor.py`): Evidently drift reports on label-free retrieval signals, comparing incoming
+   questions with the evaluated ones, plus a review queue of low-confidence queries.
 
 The questions were drafted from the manual text (with Claude) and checked against the source sections; each
 unanswerable topic was confirmed absent from the corpus by searching the chunk text.
@@ -68,6 +73,9 @@ uv run policy-rag ask "How many units can be billed for 40 minutes of 97110 and 
 uv run policy-rag eval --no-judge # answers + retrieval, abstention, citations (no judge model)
 uv run policy-rag eval --judge-only  # grade those saved answers with the judge model (slow on 8 GB VRAM)
 uv run policy-rag calibrate       # after labeling eval/human_labels.csv
+uv run policy-rag sweep           # chunking x retriever grid (one embedding pass per chunk size)
+uv run policy-rag ablate          # remove one retrieval feature at a time (--bm25-only: no Ollama)
+uv run policy-rag monitor         # drift: eval questions vs eval/traffic_sample.jsonl (add --answers to run the model)
 uv run pytest -q
 uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
 ```
@@ -93,6 +101,16 @@ breaks (40%) and embeddings earn their place (70%). Hybrid keeps BM25's precisio
 dense gain: +4 points over BM25 at top 5 (95% CI 0 to +10) on 50 questions, so the ranking among methods is
 suggestive rather than settled. Ten plain-language questions is the main gap in the test set.
 
+![Recall at 5 by question wording and retriever](reports/figures/retrieval_by_style.png)
+
+*What it shows:* every retriever finds the gold section for all 13 paraphrased questions and nearly all 27 in the
+manuals' wording. The drop is entirely on plain-language questions: BM25 4 of 10, hybrid 6, dense 7.
+
+*What it decides:* hybrid stays the default. It matches BM25 on exact tokens and recovers most of the
+plain-language gap; dense leads there by one question out of ten, which is not evidence. Going forward,
+everyday wording is the failure mode to watch, so it is what monitoring tracks, and it is where the test set
+needs more questions before dense and hybrid can be told apart.
+
 **Answers** (hybrid retrieval)
 
 | | With retrieval | Same model, no documents |
@@ -106,9 +124,33 @@ suggestive rather than settled. Ten plain-language questions is the main gap in 
 Retrieval is what makes the model usable: it raises correctness from 50% to 84%, and every claim it makes is tied to
 a cited section. Without the documents, the model answered 3 out-of-scope questions from general knowledge, with
 nothing a reviewer could check.
-Most remaining errors trace to retrieval misses on plain-language questions (e.g. "does Medicare stop paying once the
+![Answer grades split by whether retrieval found the gold section](reports/figures/answer_outcomes.png)
+
+*What it shows:* 11 of the 50 answerable questions fall short of fully correct (grades are my label where I
+labeled the answer, the judge's otherwise). Four are retrieval misses, all on plain-language questions, and all
+four answers were wrong: two answered confidently from the wrong section (e.g. "does Medicare stop paying once the
 patient stops improving?" retrieved a notification section instead of §220.2's maintenance rule, and the model
-answered "yes"), or to answers that leave out a secondary key fact (the 14-day rule for verbal certifications).
+said "yes"), two declined. The other seven had the right section in hand: five partial answers that left out a
+secondary fact (such as the 14-day rule for verbal certifications), one false decline and one misreading.
+Plain-language questions score 45%; the other 40 score 92-93%.
+
+*What it decides:* a retrieval miss turned into a wrong answer 4 times out of 4, so retrieval is the first thing
+to tune (the sweep below). More points are lost with the right section retrieved, though, so the next lever is the
+answer step. One hypothesis to test: the prompt limits answers to 1-4 sentences, which may be what drops secondary
+facts. Testing it needs the judge on every answer, so it is an eval run compared on `answer_prompt_sha` in MLflow,
+not part of the retrieval sweep.
+
+![With and without the manuals, by question wording, and on out-of-scope questions](reports/figures/rag_vs_closed_book.png)
+
+*What it shows* (judge grades on both sides): retrieval lifts manual-wording questions from 63% to 93% and
+paraphrased ones from 15% to 92%, and keeps all 12 out-of-scope questions declined (the model alone answered 3
+without a source). On plain-language questions the gain disappears: 50% with the manuals, 60% without. That is one
+question apart on ten, but the direction matters. When retrieval misses, the system answers from the wrong section
+*with a citation*, which looks more trustworthy than an unsourced guess.
+
+*What it decides:* retrieval stays; it carries 40 of 50 answerable questions and the scope control. For everyday
+questions, retrieval has to improve before the answers can be trusted. A candidate guard for later, to be tested
+on the eval set first: when the monitoring signals say retrieval is unsure, decline or flag instead of answering.
 
 **Judge calibration** (37 answers labeled by hand, chosen to include errors, partial answers and declines)
 
@@ -123,11 +165,139 @@ leniency worth knowing: it accepted two "NOT IN DOCUMENTS" replies because the r
 although the manuals contain it. The judge grades against what was retrieved, so retrieval misses can look like
 correct declines; the deterministic "retrieved a gold section" check catches those cases.
 
+![LLM judge vs human grades on 37 answers](reports/figures/judge_calibration.png)
+
+*What it shows:* 34 of 37 agree on pass/fail. Two of the three disagreements go the same way: the judge passed
+"NOT IN DOCUMENTS" replies that followed a retrieval miss. The third goes the other way (judge 0, human 1).
+
+*What it decides:* the judge grades correctness at scale, and every decline is cross-checked against the
+deterministic gold-section check; both scores sit on the same MLflow trace for that reason. The calibration
+belongs to one judge model and one judge prompt, so a change to either (`judge_prompt_sha` in MLflow) means
+labeling a fresh sample before trusting the judge's numbers again.
+
+## Feature engineering: what, why, and impact
+
+In a RAG system the features are how documents and queries are represented for search, plus the signals used to
+watch it in use. Each choice below was made for a stated reason. `policy-rag ablate` then removes one at a time
+and re-scores retrieval on the same 50 answerable questions, so the "impact" column is measured rather than
+assumed. Keyword ablations need no model and are reported here. The embedding ablations re-embed the corpus and
+need Ollama; they run with `policy-rag ablate`.
+
+![Retrieval recall with one feature removed at a time](reports/figures/ablation.png)
+
+| Feature | What | Why | Impact when removed (keyword search, top 5) |
+|---|---|---|---|
+| Section-aware chunks | Chunks follow the manuals' own sections, split at about 300 words | A citation must point to a section a reviewer can look up | Section-blind 300-word windows score 90% vs 88%, but that scoring is lenient (a window counts if it touches the gold section), and 34% of windows span two or more sections, so the answer can't be cited to one. **Kept for citability, not recall.** |
+| Table-of-contents check on headings | A line is a heading only if it is one of the next few contents entries | Cross-references ("see 220.2 - ...") and in-paragraph lists of titles look like headings | **88% -> 80%**: 4 questions lost, none gained (95% CI -16 to -2 points); plain language 40% -> 30%. Without it the parser finds 311 sections instead of 304, splitting and mislabeling real ones. The largest measured effect. |
+| Boilerplate removal | Drop running headers, page labels, contents lines, revision history | Text repeated on every page inflates term counts and fills chunks with noise | Not ablated on its own; heading detection depends on it. |
+| Section heading in the chunk text | "Reporting of Service Units With HCPCS. ..." | The heading names the topic in the manuals' own terms | No change at top 5; top 1 76% -> 74%. |
+| Tokenizer that keeps "220.2", "g-codes" | Dotted numbers and hyphenated terms stay one token | Section numbers and codes are exact-match evidence | No change at top 5; top 10 96% -> 92%. Few test questions quote a section number, so this set can't show much. |
+| Stopwords (incl. "may", "must", "shall") | Removed before keyword scoring | Common words carry no topic | None: 1 question lost, 1 gained. |
+| Embedding task prefixes | `search_query:` / `search_document:` for `nomic-embed-text` | The model was trained with them | Embedding ablation, needs Ollama. |
+| Reciprocal rank fusion | Combine keyword and embedding rankings by rank, not score | BM25 scores and cosine similarities are on different scales; ranks need no calibration | Hybrid 92% vs BM25 88% and dense 90% (vs BM25: +4 points, 95% CI 0 to +10). |
+| Chunk size and overlap | 300 words, 40 overlap | A first guess | Tested by `policy-rag sweep`. |
+| Monitoring signals | 8 label-free per-query features (see [MLOps](#mlops-mlflow-and-evidently)) | No labels exist in use | Each must predict a retrieval miss or out-of-scope question (AUC >= 0.65) before it can flag a query. |
+
+**What this changes.** The feature that mattered was structural: getting section boundaries right. Token-level
+choices (heading, tokenizer, stopwords) didn't move top-5 recall on this test set, so they stay as sensible
+defaults but aren't where further effort goes. The weak spot is plain-language questions, which is a *query-side*
+problem: a reviewer writes "sign off on the therapy plan" where the manual says "certify the plan of care". The
+next feature to try is a small glossary that maps everyday terms to the manuals' vocabulary, added to the query
+before keyword search. It gets the same treatment: an ablation on the plain-language questions, after that set
+grows beyond 10.
+
+## MLOps: MLflow and Evidently
+
+Two questions matter once a RAG system leaves the notebook: *which configuration is in use and why*, and *is it
+still working on the questions people actually ask*. MLflow answers the first, Evidently the second. The choices
+below are about keeping both honest at this scale (one person, a laptop, 62 labeled questions).
+
+### MLflow: what is tracked, and why
+
+| What | How | Why |
+|---|---|---|
+| Every eval run | experiment `policy-rag`: models, chunking, top-k as params; retrieval and answer metrics; `answers.csv`, `eval.json`, the recall chart, the question file and both prompts as artifacts | A metric without its settings can't be reproduced or compared. |
+| Lineage | params `eval_set_sha`, `answer_prompt_sha`, `judge_prompt_sha`, `git_commit` | The question set grew from 52 to 62 during development. Two runs are only comparable when the hashes match; without them, "84% vs 80%" might just mean different questions. |
+| Each answer | an MLflow **trace**: `rag` -> `retrieve` (the five excerpts with section, page, rank, score) -> `generate` (prompt version, reply) | When an answer is wrong, the trace shows whether retrieval missed the section or the model misread it. Most errors here were retrieval misses, and the trace makes that visible per question. |
+| Scores on traces | `retrieved_gold_section` / `declined_out_of_scope` (source CODE), `judge_correct` / `judge_faithful` with the judge's reason (LLM_JUDGE), and my labels from `calibrate` (HUMAN) | All three kinds of evidence sit on the same answer, so a judge-vs-human disagreement can be opened and read in one place. |
+| Retrieval sweep | experiment `policy-rag-sweep`: one parent run, a nested child run per chunk size x overlap x retriever, per-question ranks as an artifact | Chunk size was a guess (300 words). The sweep tests it instead of defending it. |
+
+Decisions:
+
+- **Sweep retrieval, not answers.** Retrieval is deterministic and costs one embedding pass per chunk size, so every
+  setting runs on all 50 answerable questions in minutes. Answer-level evaluation needs the chat model and the judge
+  for every question and setting (hours on an 8 GB GPU), and a retrieval miss turned into a wrong answer 4 times
+  out of 4.
+  Gold labels are sections, not chunks, so the same questions score every chunking.
+- **State the selection rule before running it** (`config.yaml`, `sweep.rule`): (1) the top-5 excerpts must fit a
+  3,000-word context budget, because larger chunks raise recall partly by showing the model more text; (2) rank by
+  recall@5, then plain-language recall@5, then MRR; (3) change `config.yaml` only if the paired-bootstrap 95%
+  interval for the gain over the current setting is above zero. With 50 questions one question is 2 points, so
+  most differences are noise, and the rule says so instead of chasing them.
+- **Local SQLite store, no server, no model registry.** One person, one laptop: `mlflow ui` reads `mlflow.db`. Nothing
+  is trained, so a registry would hold nothing; the "model" is a set of Ollama tags, a prompt and a chunking
+  setting, which are logged as parameters and hashes.
+- **Keep the calibrated judge rather than a built-in one.** MLflow ships LLM-judge scorers, but the judge here has
+  been calibrated against my labels (kappa 0.68). Swapping it would throw that away.
+
+### Evidently: monitoring without labels
+
+In use, nobody grades each answer, so accuracy can't be measured directly. What can be measured for every query is
+how it looks and how confident retrieval is. The evaluation showed why that matters: questions in the manuals'
+wording were retrieved 100% of the time, plain-language ones 40-70%. A shift toward everyday wording, or toward
+topics the four chapters don't cover, should show up in these signals before anyone notices wrong answers.
+
+| Signal (per query) | Meaning |
+|---|---|
+| `n_words`, `has_code` | length; whether it contains a CPT/HCPCS code, modifier or section number |
+| `oov_share` | share of query terms that never appear in the indexed manuals |
+| `bm25_top1`, `dense_top1` | best keyword and embedding match |
+| `dense_margin` | gap between best and fifth-best embedding match (flat = no clear winner) |
+| `agreement` | overlap of the keyword and embedding top 5 (they disagree when unsure) |
+| `sections_top5` | distinct sections in the hybrid top 5 (scattered = no clear topic) |
+
+`policy-rag monitor` does four things, logged to the MLflow experiment `policy-rag-monitoring` with the Evidently
+HTML report as an artifact:
+
+1. **Checks the signals are worth watching.** On the labeled questions, it computes each signal's AUC for two
+   failures: a retrieval miss, and an out-of-scope question. Only signals with AUC of at least 0.65 are used for
+   flagging. A drift alarm on a signal that doesn't predict failure is noise.
+2. **Runs a control.** It splits the reference questions in half at random and runs the same drift test. That shows
+   the false-alarm level at these sample sizes.
+3. **Tests drift** between the evaluated questions (reference) and a traffic sample (current;
+   `eval/traffic_sample.jsonl` holds 30 unlabeled queries, mostly everyday wording, including topics such as
+   prior authorization, DME rental and hospice that these chapters don't cover). Evidently's `DataDriftPreset`
+   picks the test per column (K-S for continuous signals, chi-square or Z-test for few-valued ones). The dataset
+   counts as drifted only when at least half the signals drift: with 8 signals at p < 0.05, one false alarm per run
+   is likely.
+4. **Builds a review queue** (`reports/monitoring/review_queue.csv`): traffic queries that fall past the reference's
+   10th percentile on at least two useful signals. Those are the queries to label and add to the eval set.
+
+That loop is how the system adapts: monitor -> review flagged queries -> add them to `questions.jsonl` -> rerun
+`sweep` and `eval`, and the eval-set hash records that the benchmark changed. It deliberately stops short of
+automatic retraining or re-chunking: with no labels on live queries, an automatic change could only optimize a proxy.
+
+### Reading the sweep and monitoring figures
+
+- **`reports/figures/sweep.png`**: recall at 5 for each chunk size and overlap, one line per retriever, for all
+  answerable questions (left) and plain-language ones (right). The selection rule reads the left panel. The right
+  panel is the failure mode from the results above: a setting that wins overall while losing plain-language recall
+  would be the wrong trade, and the tie-break is there to catch it.
+- **`reports/figures/monitoring_signals.png`**: each signal's AUC for a retrieval miss and for an out-of-scope
+  question on the labeled set. Only signals past the dashed 0.65 line are used to flag queries; the rest are
+  reported but don't raise flags.
+- **`reports/figures/monitoring.png`**: four signals for the evaluated questions and the traffic sample, with
+  Evidently's drift p-value for each. Read it alongside the control (half the eval set against the other half) in
+  `monitor.json`: a signal that drifts in the control at this sample size is not evidence on its own.
+
+Outputs: `reports/sweep.json`, `reports/figures/sweep.png`, `reports/monitoring/monitor.json`,
+`reports/figures/monitoring.png`; everything is also in MLflow (`uv run mlflow ui --backend-store-uri sqlite:///mlflow.db`).
+
 ## Limits
 
 - Four chapters, not the full manuals; a production version would index all relevant chapters, LCDs and articles,
   and refresh them when CMS revises a manual.
-- 52 questions is a small test set; differences between retrievers come with wide intervals.
+- 62 questions is a small test set; differences between retrievers come with wide intervals.
 - An LLM judge can be wrong in systematic ways; that is why calibration against human labels is part of the run.
 - Answers quote policy; they are not legal or billing advice.
 

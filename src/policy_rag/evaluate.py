@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from . import answer as ans
+from . import tracking
 from .config import Config
 from .retrieve import Index
 
@@ -48,17 +49,23 @@ def load_questions(cfg: Config) -> pd.DataFrame:
     return pd.read_json(cfg.path("eval_questions"), lines=True)
 
 
-def retrieval(cfg: Config, idx: Index, qs: pd.DataFrame, seed: int = 0) -> dict:
-    qa = qs[qs["answerable"]].reset_index(drop=True)
+def first_hits(idx: Index, qa: pd.DataFrame, methods) -> dict[str, np.ndarray]:
+    """Rank of the first chunk from a gold section, per answerable question (inf if not in the top 10)."""
     keys = (idx.chunks["doc"] + " " + idx.chunks["section"]).to_numpy()
-    first_hit = {}
-    for m in cfg["retrievers"]:
+    out = {}
+    for m in methods:
         ranks = []
         for q in qa.itertuples():
             top = idx.rank(q.question, m, max(KS))
             hit = np.where(np.isin(keys[top["chunk_id"].to_numpy()], q.gold))[0]
             ranks.append(hit[0] + 1 if len(hit) else np.inf)
-        first_hit[m] = np.array(ranks)
+        out[m] = np.array(ranks)
+    return out
+
+
+def retrieval(cfg: Config, idx: Index, qs: pd.DataFrame, seed: int = 0) -> dict:
+    qa = qs[qs["answerable"]].reset_index(drop=True)
+    first_hit = first_hits(idx, qa, cfg["retrievers"])
     out = {m: {f"recall@{k}": float(np.mean(r <= k)) for k in KS} | {"mrr": float(np.mean(1 / r))}
            for m, r in first_hit.items()}
     rng = np.random.default_rng(seed)
@@ -91,17 +98,21 @@ def judge(llm, model: str, q, reply: str, context: str) -> dict:
 def answers(cfg: Config, idx: Index, qs: pd.DataFrame, llm, use_judge: bool = True) -> pd.DataFrame:
     rows = []
     for q in qs.itertuples():
-        hits = idx.rank(q.question, cfg["answer_retriever"], cfg["top_k"])
-        a = ans.answer(llm, cfg["chat_model"], q.question, hits)
+        a, hits = ans.rag(idx, llm, cfg["chat_model"], q.question, cfg["answer_retriever"], cfg["top_k"])
         ctx = ans.context(hits)
+        retrieved_gold = bool(set(hits["doc"] + " " + hits["section"]) & set(q.gold))
         cb = llm.chat(cfg["chat_model"], CLOSED_BOOK, f"Question: {q.question}").strip()
         rows.append({"id": q.id, "question": q.question, "answerable": q.answerable, "style": q.style,
                      "gold": "; ".join(q.gold), "reference": q.reference, "key_facts": "; ".join(q.key_facts),
                      "answer": a["answer"], "abstained": a["abstained"], "context": ctx,
                      "cited_sections": "; ".join(a["cited_sections"]),
                      "cites_gold": bool(set(a["cited_sections"]) & set(q.gold)),
-                     "retrieved_gold": bool(set(hits["doc"] + " " + hits["section"]) & set(q.gold)),
+                     "retrieved_gold": retrieved_gold, "trace_id": a["trace_id"],
                      "closed_book_answer": cb, "closed_book_abstained": cb.upper().startswith(ans.ABSTAIN)})
+        if q.answerable:                                   # deterministic checks, attached to the trace
+            tracking.feedback(a["trace_id"], "retrieved_gold_section", retrieved_gold, "CODE", "gold_sections")
+        else:
+            tracking.feedback(a["trace_id"], "declined_out_of_scope", a["abstained"], "CODE", "abstain_check")
         log.info("%s %s | %s", q.id, "abstain" if a["abstained"] else "answer", a["answer"][:90].replace("\n", " "))
     out = pd.DataFrame(rows)
     return judge_all(cfg, llm, out) if use_judge else out
@@ -116,6 +127,9 @@ def judge_all(cfg: Config, llm, a: pd.DataFrame) -> pd.DataFrame:
         g = judge(llm, cfg["judge_model"], q, r.answer, r.context)
         g |= {f"closed_book_{k}": v for k, v in judge(llm, cfg["judge_model"], q, r.closed_book_answer, "").items()}
         graded.append(g)
+        for name in ("correct", "faithful"):
+            tracking.feedback(getattr(r, "trace_id", None), f"judge_{name}", g[f"judge_{name}"], "LLM_JUDGE",
+                              cfg["judge_model"], g["judge_reason"])
         log.info("judged %s: correct %s, faithful %s", r.id, g["judge_correct"], g["judge_faithful"])
     return pd.concat([a.reset_index(drop=True), pd.DataFrame(graded)], axis=1)
 
@@ -139,6 +153,29 @@ def summarize(a: pd.DataFrame) -> dict:
 
 
 def run(cfg: Config, llm, use_judge: bool = True, retrieval_only: bool = False, judge_only: bool = False) -> dict:
+    tracking.setup(cfg, "policy-rag")
+    with mlflow.start_run(run_name=f"{cfg['chat_model']}|{cfg['answer_retriever']}") as run:
+        mlflow.log_params({k: cfg[k] for k in ("embed_model", "chat_model", "judge_model", "top_k",
+                                                "answer_retriever")} | cfg["chunk"] | tracking.lineage(cfg))
+        mlflow.set_tags({"step": "judge-only" if judge_only else "retrieval-only" if retrieval_only
+                         else "answers+judge" if use_judge else "answers"})
+        mlflow.log_artifact(str(cfg.path("eval_questions")), "eval")
+        mlflow.log_text(ans.SYSTEM, "prompts/answer_system.txt")
+        mlflow.log_text(JUDGE_SYSTEM, "prompts/judge_system.txt")
+        res = _run(cfg, llm, use_judge, retrieval_only, judge_only)
+        for m in cfg["retrievers"]:
+            mlflow.log_metrics({f"{m}_{k.replace('@', '_at_')}": v for k, v in res["retrieval"][m].items()})
+        if "answers" in res:
+            mlflow.log_metrics({k: v for k, v in res["answers"].items() if isinstance(v, float) and not np.isnan(v)})
+            mlflow.log_artifact(str(cfg.reports / "answers.csv"))
+        _chart(res, cfg)
+        mlflow.log_artifact(str(cfg.reports / "eval.json"))
+        mlflow.log_artifact(str(cfg.reports / "figures" / "retrieval_recall.png"), "figures")
+        res["mlflow_run_id"] = run.info.run_id
+    return res
+
+
+def _run(cfg: Config, llm, use_judge: bool, retrieval_only: bool, judge_only: bool) -> dict:
     idx = Index(cfg, llm)
     qs = load_questions(cfg)
     res = {"retrieval": retrieval(cfg, idx, qs)}
@@ -157,17 +194,6 @@ def run(cfg: Config, llm, use_judge: bool = True, retrieval_only: bool = False, 
             a[["id", "question", "reference", "key_facts", "answer", "context"]].assign(
                 human_correct="", human_faithful="").to_csv(human, index=False)
     (cfg.reports / "eval.json").write_text(json.dumps(res, indent=2, default=float))
-    mlflow.set_tracking_uri(cfg.mlflow_uri)
-    mlflow.set_experiment("policy-rag")
-    with mlflow.start_run(run_name=f"{cfg['chat_model']}|{cfg['answer_retriever']}"):
-        mlflow.log_params({k: cfg[k] for k in ("embed_model", "chat_model", "judge_model", "top_k",
-                                                "answer_retriever")} | cfg["chunk"])
-        for m in cfg["retrievers"]:
-            mlflow.log_metrics({f"{m}_{k.replace('@', '_at_')}": v for k, v in res["retrieval"][m].items()})
-        if "answers" in res:
-            mlflow.log_metrics({k: v for k, v in res["answers"].items() if isinstance(v, float) and not np.isnan(v)})
-            mlflow.log_artifact(str(cfg.reports / "answers.csv"))
-    _chart(res, cfg)
     return res
 
 
@@ -188,6 +214,14 @@ def calibrate(cfg: Config) -> dict:
             out[j] = {"n": len(x), "agreement": po, "cohen_kappa": (po - pe) / (1 - pe) if pe < 1 else np.nan,
                       "judge_rate": float(jb.mean()), "human_rate": float(hb.mean())}
     (cfg.reports / "judge_calibration.json").write_text(json.dumps(out, indent=2, default=float))
+    if "trace_id" in d:                                  # attach your labels to the traces they describe
+        tracking.setup(cfg, "policy-rag")
+        for r in d.itertuples():
+            for name in ("correct", "faithful"):
+                v = getattr(r, f"human_{name}")
+                if pd.notna(v):
+                    tracking.feedback(r.trace_id, f"human_{name}", float(v), "HUMAN", "reviewer")
+        out["labels_attached_to_traces"] = int(d["trace_id"].notna().sum())
     return out
 
 

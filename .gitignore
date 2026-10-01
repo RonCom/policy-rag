@@ -6,3 +6,5 @@ data/
 mlflow.db
 mlruns/
 *.pyc
+mlartifacts/
+reports/monitoring/*.html

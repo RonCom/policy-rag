@@ -38,11 +38,7 @@ def page_lines(path) -> list[tuple[int, str]]:
     return out
 
 
-def _num(key: str) -> tuple:
-    return tuple(int(x) for x in key.split(".")) if key[0].isdigit() else (ord(key),)
-
-
-def sections(lines: list[tuple[int, str]], style: str) -> list[dict]:
+def sections(lines: list[tuple[int, str]], style: str, toc_check: bool = True) -> list[dict]:
     """Split on section headings.
 
     CMS Internet-Only Manuals open with a table of contents (pages made mostly of heading lines). In the body a
@@ -82,7 +78,7 @@ def sections(lines: list[tuple[int, str]], style: str) -> list[dict]:
             continue
         m = head.match(s)
         ok = bool(m) and not s.endswith((",", ";")) and len(s.split()) <= 25
-        if ok and style == "iom":                         # must be one of the next few entries in the contents
+        if ok and style == "iom" and toc_check:           # must be one of the next few entries in the contents
             i = pos.get(m.group(1), -1)
             ok = last < i <= last + 4
             if ok:
@@ -110,7 +106,10 @@ def split_words(text: str, max_words: int, overlap: int) -> list[str]:
     return [" ".join(w[i:i + max_words]) for i in range(0, max(1, len(w) - overlap), step)]
 
 
-def chunk_docs(cfg: Config) -> pd.DataFrame:
+def chunk_docs(cfg: Config, max_words: int | None = None, overlap: int | None = None,
+               toc_check: bool = True) -> pd.DataFrame:
+    max_words = max_words or cfg["chunk"]["max_words"]
+    overlap = cfg["chunk"]["overlap_words"] if overlap is None else overlap
     rows = []
     for fname, label in cfg["docs"].items():
         path = cfg.path("docs_dir") / fname
@@ -118,9 +117,9 @@ def chunk_docs(cfg: Config) -> pd.DataFrame:
             log.warning("missing %s (see README for the download link)", path)
             continue
         style = "ncci" if "ncci" in fname.lower() else "iom"
-        for sc in sections(page_lines(path), style):
+        for sc in sections(page_lines(path), style, toc_check):
             text = re.sub(r"\s+", " ", " ".join(sc["lines"])).strip()
-            for j, piece in enumerate(split_words(text, cfg["chunk"]["max_words"], cfg["chunk"]["overlap_words"])):
+            for j, piece in enumerate(split_words(text, max_words, overlap)):
                 rows.append({"doc": label, "file": fname, "section": sc["section"], "heading": sc["heading"],
                              "page": sc["page"], "part": j, "text": piece})
     df = pd.DataFrame(rows)
@@ -128,11 +127,11 @@ def chunk_docs(cfg: Config) -> pd.DataFrame:
     return df
 
 
-def build(cfg: Config, llm) -> pd.DataFrame:
-    df = chunk_docs(cfg)
+def build(cfg: Config, llm, max_words: int | None = None, overlap: int | None = None, db=None) -> pd.DataFrame:
+    df = chunk_docs(cfg, max_words, overlap)
     emb = llm.embed((df["heading"] + ". " + df["text"]).tolist(), "document")
     df["embedding"] = list(emb)
-    con = duckdb.connect(str(cfg.db_path))
+    con = duckdb.connect(str(db or cfg.db_path))
     con.execute("DROP TABLE IF EXISTS chunks")
     con.register("df", df)
     con.execute("CREATE TABLE chunks AS SELECT * FROM df")

@@ -46,8 +46,8 @@ class BM25:
 
 
 class Index:
-    def __init__(self, cfg: Config, llm):
-        con = duckdb.connect(str(cfg.db_path), read_only=True)
+    def __init__(self, cfg: Config, llm, db=None):
+        con = duckdb.connect(str(db or cfg.db_path), read_only=True)
         self.chunks = con.execute("SELECT * FROM chunks ORDER BY chunk_id").df()
         emb = con.execute("SELECT embedding FROM chunks ORDER BY chunk_id").fetchnumpy()["embedding"]
         con.close()

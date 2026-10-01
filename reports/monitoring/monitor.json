@@ -1,0 +1,170 @@
+{
+  "reference_queries": 62,
+  "current_queries": 30,
+  "signal_validity": {
+    "n_answerable": 50,
+    "n_retrieval_misses": 4,
+    "n_out_of_scope": 12,
+    "oov_share": {
+      "auc_retrieval_miss": 0.6413043478260869,
+      "auc_out_of_scope": 0.9225
+    },
+    "bm25_top1": {
+      "auc_retrieval_miss": 0.6358695652173914,
+      "auc_out_of_scope": 0.945
+    },
+    "dense_top1": {
+      "auc_retrieval_miss": 0.8858695652173914,
+      "auc_out_of_scope": 0.9733333333333334
+    },
+    "dense_margin": {
+      "auc_retrieval_miss": 0.7989130434782609,
+      "auc_out_of_scope": 0.715
+    },
+    "agreement": {
+      "auc_retrieval_miss": 0.8614130434782609,
+      "auc_out_of_scope": 0.8283333333333334
+    },
+    "sections_top5": {
+      "auc_retrieval_miss": 0.8695652173913043,
+      "auc_out_of_scope": 0.8133333333333334
+    }
+  },
+  "control": {
+    "columns": {
+      "n_words": {
+        "method": "K-S p_value",
+        "p_value": 0.41354510011947465,
+        "drifted": false
+      },
+      "oov_share": {
+        "method": "K-S p_value",
+        "p_value": 0.615053935325554,
+        "drifted": false
+      },
+      "bm25_top1": {
+        "method": "K-S p_value",
+        "p_value": 0.9634297148886908,
+        "drifted": false
+      },
+      "dense_top1": {
+        "method": "K-S p_value",
+        "p_value": 0.14742010273046638,
+        "drifted": false
+      },
+      "dense_margin": {
+        "method": "K-S p_value",
+        "p_value": 0.41354510011947465,
+        "drifted": false
+      },
+      "agreement": {
+        "method": "K-S p_value",
+        "p_value": 0.615053935325554,
+        "drifted": false
+      },
+      "sections_top5": {
+        "method": "chi-square p_value",
+        "p_value": 2.5496293051335527e-08,
+        "drifted": true
+      },
+      "has_code": {
+        "method": "Z-test p_value",
+        "p_value": 0.3186079380253539,
+        "drifted": false
+      }
+    },
+    "drifted_columns": 1,
+    "drift_share": 0.125,
+    "dataset_drift": false
+  },
+  "drift": {
+    "columns": {
+      "n_words": {
+        "method": "K-S p_value",
+        "p_value": 0.009584236464960988,
+        "drifted": true
+      },
+      "oov_share": {
+        "method": "K-S p_value",
+        "p_value": 0.9994616091142162,
+        "drifted": false
+      },
+      "bm25_top1": {
+        "method": "K-S p_value",
+        "p_value": 0.028857568290738475,
+        "drifted": true
+      },
+      "dense_top1": {
+        "method": "K-S p_value",
+        "p_value": 0.06521052461567846,
+        "drifted": false
+      },
+      "dense_margin": {
+        "method": "K-S p_value",
+        "p_value": 0.6321648143621648,
+        "drifted": false
+      },
+      "agreement": {
+        "method": "K-S p_value",
+        "p_value": 0.06882784581513836,
+        "drifted": false
+      },
+      "sections_top5": {
+        "method": "chi-square p_value",
+        "p_value": 0.2656158535266853,
+        "drifted": false
+      },
+      "has_code": {
+        "method": "Z-test p_value",
+        "p_value": 0.1528272229570291,
+        "drifted": false
+      }
+    },
+    "drifted_columns": 2,
+    "drift_share": 0.25,
+    "dataset_drift": false
+  },
+  "means": {
+    "n_words": {
+      "reference": 14.080645161290322,
+      "current": 10.733333333333333
+    },
+    "oov_share": {
+      "reference": 0.054183509849893556,
+      "current": 0.039378306878306873
+    },
+    "bm25_top1": {
+      "reference": 22.461886220365795,
+      "current": 15.973309233687477
+    },
+    "dense_top1": {
+      "reference": 0.7651007146604599,
+      "current": 0.7416923920313517
+    },
+    "dense_margin": {
+      "reference": 0.04781250415309783,
+      "current": 0.04433359106381734
+    },
+    "agreement": {
+      "reference": 0.4225806451612903,
+      "current": 0.26
+    },
+    "sections_top5": {
+      "reference": 3.032258064516129,
+      "current": 3.4
+    },
+    "has_code": {
+      "reference": 0.1774193548387097,
+      "current": 0.06666666666666667
+    }
+  },
+  "useful_signals": [
+    "oov_share",
+    "bm25_top1",
+    "dense_top1",
+    "dense_margin",
+    "agreement",
+    "sections_top5"
+  ],
+  "flagged_for_review": 2
+}

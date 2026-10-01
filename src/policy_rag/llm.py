@@ -17,8 +17,8 @@ class Ollama:
         self.embed_model, self.temperature = cfg["embed_model"], cfg["temperature"]
 
     def embed(self, texts: list[str], kind: str) -> np.ndarray:
-        # nomic-embed-text expects task prefixes; other models ignore them harmlessly
-        prefix = "search_query: " if kind == "query" else "search_document: "
+        # nomic-embed-text expects task prefixes ("raw" = none, for the ablation); other models ignore them
+        prefix = {"query": "search_query: ", "document": "search_document: "}.get(kind, "")
         out = []
         for i in range(0, len(texts), 32):
             r = requests.post(f"{self.url}/api/embed", timeout=600,

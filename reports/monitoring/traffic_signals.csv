@@ -1,0 +1,31 @@
+id,question,n_words,has_code,oov_share,bm25_top1,dense_top1,dense_margin,agreement,sections_top5,reasons,n_flags
+t01,"my physical therapist billed 3 units for a 35 minute session, is that allowed",14,0,0.1,19.592246372275827,0.7856531143188477,0.056563377380371094,0.6,1,,0
+t02,how many minutes does a therapy session need before you can bill even one unit,15,0,0.0,33.26627115698129,0.8200162649154663,0.06575202941894531,0.4,2,,0
+t03,can two different therapy codes done in the same visit both be billed,13,0,0.0,15.575294740766081,0.7348659038543701,0.016668319702148438,0.0,3,,0
+t04,"does the doctor have to sign off on the therapy plan, and how fast",14,0,0.0,13.008459457042804,0.7590012550354004,0.024774909019470215,0.0,2,,0
+t05,how often does a patient's therapy plan need to be redone,11,0,0.1111111111111111,14.708175570205597,0.8094624876976013,0.057221949100494385,0.2,2,,0
+t06,is there a yearly dollar cap on outpatient PT and speech therapy,12,0,0.0,14.465025843995095,0.7638328075408936,0.048931121826171875,0.0,4,,0
+t07,what's the KX modifier for on therapy claims,8,1,0.0,16.303744553537648,0.8480062484741211,0.12201488018035889,0.8,3,,0
+t08,when is it ok to put modifier 59 on a claim,11,1,0.16666666666666666,12.191265176070168,0.7690449953079224,0.05987846851348877,0.6,2,oov_share,1
+t09,can a chiropractor bill for massage on the same day as an adjustment,13,0,0.0,13.412364080611152,0.7376790046691895,0.023738622665405273,0.4,4,,0
+t10,does medicare pay a chiropractor for anything besides spine adjustments,10,0,0.125,17.549530414126835,0.8058471083641052,0.072628915309906,0.6,4,,0
+t11,what counts as maintenance therapy and is it covered,9,0,0.0,12.719672380648817,0.8230504393577576,0.041981279850006104,0.6,1,,0
+t12,who decides how many units of a code are too many per day,13,0,0.0,16.338708739984657,0.7352031469345093,0.0260317325592041,0.2,2,,0
+t13,why would a claim line get denied for too many units,11,0,0.0,21.104645031207326,0.7125933170318604,0.06364822387695312,0.2,3,,0
+t14,can an assistant therapist treat patients without the PT there,10,0,0.0,10.762353697109386,0.7365173101425171,0.0425492525100708,0.0,5,bm25_top1,1
+t15,is group therapy billed per person or per session,9,0,0.0,20.70456801707369,0.7489527463912964,0.06077951192855835,0.2,5,,0
+t16,what happens if the therapy re-certification is signed late,9,0,0.0,10.596001458653754,0.7271339893341064,0.01837790012359619,0.0,3,bm25_top1,1
+t17,do evaluation codes count toward the 8 minute rule,9,0,0.0,21.55396194690541,0.7054860591888428,0.03209853172302246,0.4,2,,0
+t18,can you bill a full unit if you only did 10 minutes of two different exercises,16,0,0.0,39.94074303950699,0.7941262722015381,0.10747718811035156,0.6,1,,0
+t19,does medicare advantage require prior authorization for physical therapy,9,0,0.0,13.953454425042594,0.7527742385864258,0.0345723032951355,0.0,4,,0
+t20,how do I bill a telehealth physical therapy visit from home,11,0,0.0,17.5329969457303,0.7190914154052734,0.024141430854797363,0.2,5,,0
+t21,what are the rules for renting a wheelchair versus buying one,11,0,0.14285714285714285,7.904644354214878,0.6936308741569519,0.023127496242523193,0.2,5,bm25_top1,1
+t22,how much is the part d late enrollment penalty,9,0,0.14285714285714285,8.653923334650166,0.608399510383606,0.02347099781036377,0.0,5,bm25_top1 dense_top1,2
+t23,does medicare cover ambulance rides to a dialysis center,9,0,0.14285714285714285,14.531637312022278,0.7358376383781433,0.02133554220199585,0.2,5,,0
+t24,what is the 3 day hospital stay rule for skilled nursing,11,0,0.0,15.701846012710746,0.6557497382164001,0.024876058101654053,0.2,5,dense_top1,1
+t25,how often will medicare pay for a cholesterol blood test,10,0,0.0,11.867304314721324,0.7886883616447449,0.1010979413986206,0.0,4,,0
+t26,can a home health agency bill therapy visits separately,9,0,0.0,19.758107146750376,0.7462124824523926,0.027915239334106445,0.6,3,,0
+t27,what is the hospice election period,6,0,0.25,8.682929338104218,0.6369659900665283,0.016495943069458008,0.2,4,oov_share bm25_top1 dense_top1,3
+t28,how do I appeal a denied claim to the qualified independent contractor,12,0,0.0,14.075795996419656,0.6980168223381042,0.011970102787017822,0.4,4,dense_margin,1
+t29,what are the 2026 physician fee schedule conversion factor changes,10,0,0.0,11.322889136744077,0.6836506128311157,0.036247074604034424,0.0,4,bm25_top1,1
+t30,does medicare pay for acupuncture for back pain,8,0,0.0,11.420717016811219,0.71528160572052,0.04364138841629028,0.0,5,bm25_top1,1

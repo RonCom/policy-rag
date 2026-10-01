@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(os.environ.get("POLICY_RAG_ROOT", Path(__file__).resolve().parents[2]))  # override for tests
 
 
 @dataclass

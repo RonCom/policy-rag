@@ -26,3 +26,16 @@ answer_retriever: hybrid
 # ---- Evaluation ---------------------------------------------------------------------------
 eval_questions: eval/questions.jsonl
 human_labels: eval/human_labels.csv
+
+# ---- Retrieval sweep (policy-rag sweep; MLflow experiment "policy-rag-sweep") ------------------
+sweep:
+  grid: [[150, 30], [300, 0], [300, 40], [500, 60], [800, 80]]   # [max_words, overlap_words]
+  max_context_words: 3000          # top-k excerpts must fit this budget (~4k tokens of an 8k window)
+  rule: "max recall@5 within context budget; ties: plain recall@5, MRR; switch only if bootstrap CI > 0"
+
+# ---- Monitoring (policy-rag monitor; Evidently + MLflow experiment "policy-rag-monitoring") -----
+monitor:
+  reference: eval/questions.jsonl  # what was measured: the evaluated question mix
+  current: eval/traffic_sample.jsonl
+  flag_quantile: 0.1               # "low confidence" = beyond the reference's 10th percentile on a signal
+  min_flags: 2                     # review a query when at least this many signals are low

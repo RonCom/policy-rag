@@ -1,0 +1,32 @@
+{
+  "best": {
+    "name": "w800_o80_dense",
+    "recall_at_1": 0.8,
+    "recall_at_5": 0.94,
+    "mrr": 0.8473333333333334,
+    "plain_recall_at_5": 0.8,
+    "chunks": 444,
+    "context_words_top_k": 2820.82
+  },
+  "current": {
+    "name": "w300_o40_hybrid",
+    "recall_at_1": 0.76,
+    "recall_at_5": 0.92,
+    "mrr": 0.8293571428571428,
+    "plain_recall_at_5": 0.6,
+    "chunks": 851,
+    "context_words_top_k": 1393.16
+  },
+  "best_minus_current_recall_at_5": {
+    "est": 0.019999999999999907,
+    "ci95": [
+      -0.06000000000000005,
+      0.12
+    ]
+  },
+  "excluded_over_budget": [
+    "w800_o80_bm25",
+    "w800_o80_hybrid"
+  ],
+  "recommendation": "keep current setting (w800_o80_dense ranks first, but the gain is within noise)"
+}

@@ -1,0 +1,3 @@
+id,question,n_words,has_code,oov_share,bm25_top1,dense_top1,dense_margin,agreement,sections_top5,reasons,n_flags
+t27,what is the hospice election period,6,0,0.25,8.682929338104218,0.6369659900665283,0.016495943069458008,0.2,4,oov_share bm25_top1 dense_top1,3
+t22,how much is the part d late enrollment penalty,9,0,0.14285714285714285,8.653923334650166,0.608399510383606,0.02347099781036377,0.0,5,bm25_top1 dense_top1,2
