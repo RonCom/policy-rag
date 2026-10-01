@@ -1,0 +1,28 @@
+# ---- Corpus ---------------------------------------------------------------------
+docs_dir: data/docs                # the CMS manual PDFs (see README for links)
+data_dir: data
+docs:                              # file name -> short citation label
+  01-chapter1-ncci-medicare-policy-manual-2026-final.pdf: NCCI Ch. 1
+  11-chapter11a-ncci-medicare-policy-manual-2026-final.pdf: NCCI Ch. 11
+  bp102c15.pdf: Benefit Policy Manual Ch. 15
+  clm104c05.pdf: Claims Processing Manual Ch. 5
+
+chunk:
+  max_words: 300                   # split long sections into pieces of about this size
+  overlap_words: 40
+
+# ---- Models (Ollama, local) ----------------------------------------------------------
+ollama_url: http://localhost:11434
+embed_model: nomic-embed-text
+chat_model: gemma4:e4b             # answers (fits 8 GB VRAM)
+judge_model: gemma4:26b            # grading: a larger model than the one being graded
+temperature: 0
+
+# ---- Retrieval and answering ----------------------------------------------------------
+retrievers: [bm25, dense, hybrid]
+top_k: 5
+answer_retriever: hybrid
+
+# ---- Evaluation ---------------------------------------------------------------------------
+eval_questions: eval/questions.jsonl
+human_labels: eval/human_labels.csv

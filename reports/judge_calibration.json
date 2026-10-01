@@ -1,0 +1,18 @@
+{
+  "labeled": 37,
+  "matched_to_current_answers": 37,
+  "judge_correct": {
+    "n": 37,
+    "agreement": 0.918918918918919,
+    "cohen_kappa": 0.6801152737752163,
+    "judge_rate": 0.8648648648648649,
+    "human_rate": 0.8378378378378378
+  },
+  "judge_faithful": {
+    "n": 37,
+    "agreement": 0.972972972972973,
+    "cohen_kappa": 0.0,
+    "judge_rate": 0.972972972972973,
+    "human_rate": 1.0
+  }
+}

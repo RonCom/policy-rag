@@ -1,0 +1,78 @@
+{
+  "retrieval": {
+    "bm25": {
+      "recall@1": 0.76,
+      "recall@3": 0.82,
+      "recall@5": 0.88,
+      "recall@10": 0.96,
+      "mrr": 0.8055
+    },
+    "dense": {
+      "recall@1": 0.7,
+      "recall@3": 0.86,
+      "recall@5": 0.9,
+      "recall@10": 0.96,
+      "mrr": 0.7910238095238096
+    },
+    "hybrid": {
+      "recall@1": 0.76,
+      "recall@3": 0.9,
+      "recall@5": 0.92,
+      "recall@10": 0.96,
+      "mrr": 0.8293571428571428
+    },
+    "hybrid_minus_bm25_recall@5": {
+      "est": 0.040000000000000036,
+      "ci95": [
+        0.0,
+        0.10000000000000009
+      ]
+    },
+    "hybrid_minus_dense_recall@5": {
+      "est": 0.020000000000000018,
+      "ci95": [
+        -0.06000000000000005,
+        0.12
+      ]
+    },
+    "dense_minus_bm25_recall@5": {
+      "est": 0.020000000000000018,
+      "ci95": [
+        -0.07999999999999996,
+        0.12
+      ]
+    },
+    "by_style": {
+      "bm25": {
+        "exact": 1.0,
+        "paraphrase": 1.0,
+        "plain": 0.4
+      },
+      "dense": {
+        "exact": 0.9259259259259259,
+        "paraphrase": 1.0,
+        "plain": 0.7
+      },
+      "hybrid": {
+        "exact": 1.0,
+        "paraphrase": 1.0,
+        "plain": 0.6
+      }
+    }
+  },
+  "answers": {
+    "questions": 62,
+    "answerable": 50,
+    "unanswerable": 12,
+    "abstained_on_unanswerable": 1.0,
+    "abstained_on_answerable": 0.06,
+    "retrieved_gold_section": 0.92,
+    "cites_gold_when_answering": 0.8936170212765957,
+    "closed_book_abstained_on_unanswerable": 0.75,
+    "judge_correct_answerable": 0.84,
+    "judge_faithful_when_answering": 1.0,
+    "closed_book_judge_correct_answerable": 0.5,
+    "judge_correct_all": 0.8709677419354839,
+    "closed_book_judge_correct_all": 0.5483870967741935
+  }
+}
