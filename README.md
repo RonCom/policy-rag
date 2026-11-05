@@ -114,8 +114,8 @@ Retrieval recall isn't answer quality, so rerank also got an answer-level test, 
 run: switch only if judged correctness on the 50 answerable questions rises with a paired bootstrap 95% CI above
 zero, with no more false declines. Both retrievers scored 84% on the judge alone (difference +0.00, CI −0.09 to +0.09); with the decline rule, hybrid
 scores 80% and rerank at most 80%, since its two extra false declines (p03, p10) lose the judge's credit. Rerank changed
-the grade on 11 questions, 6 better and 5 worse; it fixed p02 (a 5-minute service, now correctly not billable) and
-added a false decline (3 of 50 vs. 2). Hybrid stays the answer retriever. Both runs are in MLflow.
+the grade on 11 questions, 6 better and 5 worse; it fixed p02 (a 5-minute service, now correctly not billable),
+declined two questions hybrid answered (p03, p10) and answered one hybrid declined (p05). Hybrid stays the answer retriever. Both runs are in MLflow.
 
 Questions written in the manuals' own words are easy for keyword search; plain-language questions are where it
 breaks (40%) and embeddings earn their place (70%). Hybrid keeps BM25's precision on exact terms and most of the
@@ -140,7 +140,7 @@ needs more questions before dense and hybrid can be told apart.
 | Judge alone, answerable questions | 84% | 53% |
 | Declined the 12 questions the manuals do not answer | **12 / 12** | 9 / 12 (answered 3 from memory, unsourced) |
 | Declined an answerable question | 3 / 50 (one in prose) | – |
-| Cited a gold section when answering | 88% | – |
+| Cited a gold section when answering | 89% | – |
 | Faithful to the excerpts (judge) | 96% | – |
 
 Retrieval is what makes the model usable: it raises correctness from 1% to 80%, and every claim it makes is tied to
@@ -407,7 +407,7 @@ which `monitor --answers` tracks as an abstain rate.
 The first full rerun (answers, judge, calibration) reproduced every metric, and all 37 hand labels matched the
 regenerated answers word for word. A later rerun with the same prompt hashes, still at temperature 0, changed 35
 of 62 answers and 28 of 62 closed-book answers. Judged correctness held at 84%; the closed-book baseline moved from 50% to
-53%, false declines from 3 to 2 of 50, and judged faithfulness from 100% to 96%. With the decline rule, correctness
+53%, false declines stayed at 3 of 50 (2 exact and 1 in prose in the rerun), and judged faithfulness moved from 100% to 96%. With the decline rule, correctness
 held at 80% and the closed-book baseline moved from 0% to 1%. The closed-book answers involve no
 retrieval and changed too, which points at the answer model or the Ollama server; the graded run was committed on
 2026-10-01, and the rerun used Ollama 0.35.1 with `gemma4:e4b` digest `dc35e8d9c606`. Earlier runs logged neither,
