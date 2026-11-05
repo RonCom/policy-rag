@@ -70,7 +70,7 @@ def retrieval(cfg: Config, idx: Index, qs: pd.DataFrame, seed: int = 0) -> dict:
            for m, r in first_hit.items()}
     rng = np.random.default_rng(seed)
     n = len(qa)
-    for a, b in (("hybrid", "bm25"), ("hybrid", "dense"), ("dense", "bm25")):
+    for a, b in (("hybrid", "bm25"), ("hybrid", "dense"), ("dense", "bm25"), ("rerank", "hybrid")):
         if a in first_hit and b in first_hit:
             d = [np.mean(first_hit[a][i] <= 5) - np.mean(first_hit[b][i] <= 5)
                  for i in (rng.integers(0, n, n) for _ in range(2000))]
@@ -98,7 +98,8 @@ def judge(llm, model: str, q, reply: str, context: str) -> dict:
 def answers(cfg: Config, idx: Index, qs: pd.DataFrame, llm, use_judge: bool = True) -> pd.DataFrame:
     rows = []
     for q in qs.itertuples():
-        a, hits = ans.rag(idx, llm, cfg["chat_model"], q.question, cfg["answer_retriever"], cfg["top_k"])
+        a, hits = ans.rag(idx, llm, cfg["chat_model"], q.question, cfg["answer_retriever"], cfg["top_k"],
+                          cfg.get("pricing"))
         ctx = ans.context(hits)
         retrieved_gold = bool(set(hits["doc"] + " " + hits["section"]) & set(q.gold))
         cb = llm.chat(cfg["chat_model"], CLOSED_BOOK, f"Question: {q.question}").strip()
@@ -108,7 +109,9 @@ def answers(cfg: Config, idx: Index, qs: pd.DataFrame, llm, use_judge: bool = Tr
                      "cited_sections": "; ".join(a["cited_sections"]),
                      "cites_gold": bool(set(a["cited_sections"]) & set(q.gold)),
                      "retrieved_gold": retrieved_gold, "trace_id": a["trace_id"],
-                     "closed_book_answer": cb, "closed_book_abstained": cb.upper().startswith(ans.ABSTAIN)})
+                     **{c: a[c] for c in COST_COLS},
+                     "closed_book_answer": cb, "closed_book_abstained": bool(ans.declined(cb)),
+                     "closed_book_abstain_kind": ans.declined(cb)})
         if q.answerable:                                   # deterministic checks, attached to the trace
             tracking.feedback(a["trace_id"], "retrieved_gold_section", retrieved_gold, "CODE", "gold_sections")
         else:
@@ -116,6 +119,35 @@ def answers(cfg: Config, idx: Index, qs: pd.DataFrame, llm, use_judge: bool = Tr
         log.info("%s %s | %s", q.id, "abstain" if a["abstained"] else "answer", a["answer"][:90].replace("\n", " "))
     out = pd.DataFrame(rows)
     return judge_all(cfg, llm, out) if use_judge else out
+
+
+def code_rules(a: pd.DataFrame) -> pd.DataFrame:
+    """Rubric rules the eval set decides exactly, applied in code after the judge (idempotent).
+
+    - Declines are re-detected from the answer text (`answer.declined`): the exact NOT IN DOCUMENTS reply, or a decline
+      written as prose in the first sentence (p09: "The excerpts do not provide a specific answer ..."). This also
+      reclassifies answers.csv files written before prose detection existed.
+    - An exact decline is faithful (the judge rubric says so; the judge broke it on q15). A prose decline can go on to
+      make claims, so its faithfulness stays the judge's. The judge's own value is kept in `*_judge_faithful_raw`.
+    - A decline of either kind on an answerable question is wrong. The judge passed such declines when the retrieved
+      excerpts lacked the answer (p03, p05, p09, p10), so `judge_correct` stays as graded and `*correct_strict`
+      scores them 0.
+    """
+    a = a.copy()
+    for pre, abst, text in (("", "abstained", "answer"), ("closed_book_", "closed_book_abstained", "closed_book_answer")):
+        if text in a:
+            kind = a[text].map(ans.declined)
+            a[f"{pre}abstain_kind"], a[abst] = kind, kind != ""
+        jc, jf = f"{pre}judge_correct", f"{pre}judge_faithful"
+        if jc not in a or abst not in a:
+            continue
+        declined = a[abst].astype(bool)
+        exact = a[f"{pre}abstain_kind"] == "exact" if f"{pre}abstain_kind" in a else declined
+        if f"{jf}_raw" not in a:
+            a[f"{jf}_raw"] = a[jf]
+        a.loc[exact, jf] = 1.0
+        a[f"{pre}correct_strict"] = a[jc].where(~(declined & a["answerable"].astype(bool)), 0.0)
+    return a
 
 
 def judge_all(cfg: Config, llm, a: pd.DataFrame) -> pd.DataFrame:
@@ -131,10 +163,30 @@ def judge_all(cfg: Config, llm, a: pd.DataFrame) -> pd.DataFrame:
             tracking.feedback(getattr(r, "trace_id", None), f"judge_{name}", g[f"judge_{name}"], "LLM_JUDGE",
                               cfg["judge_model"], g["judge_reason"])
         log.info("judged %s: correct %s, faithful %s", r.id, g["judge_correct"], g["judge_faithful"])
-    return pd.concat([a.reset_index(drop=True), pd.DataFrame(graded)], axis=1)
+    return code_rules(pd.concat([a.reset_index(drop=True), pd.DataFrame(graded)], axis=1))
+
+
+COST_COLS = ("latency_ms", "retrieve_ms", "generate_ms", "load_ms", "prompt_tokens", "completion_tokens", "cost_usd")
+
+
+def cost_summary(a: pd.DataFrame) -> dict:
+    """Latency, tokens and cost per answer. Model load time (Ollama loading weights after an idle unload) is
+    reported apart: it lands on whichever question comes first and would otherwise set the p95."""
+    if "latency_ms" not in a:                                # answers.csv from a run before these columns existed
+        return {}
+    lat = a["latency_ms"].astype(float)
+    warm = lat - a["load_ms"].astype(float)
+    return {"latency_p50_s": float(lat.quantile(0.5) / 1000), "latency_p95_s": float(lat.quantile(0.95) / 1000),
+            "latency_p95_excl_load_s": float(warm.quantile(0.95) / 1000),
+            "retrieve_p95_ms": float(a["retrieve_ms"].quantile(0.95)),
+            "generate_p95_ms": float(a["generate_ms"].quantile(0.95)),
+            "prompt_tokens_mean": float(a["prompt_tokens"].mean()),
+            "completion_tokens_mean": float(a["completion_tokens"].mean()),
+            "cost_usd_total": float(a["cost_usd"].sum()), "cost_usd_per_answer": float(a["cost_usd"].mean())}
 
 
 def summarize(a: pd.DataFrame) -> dict:
+    a = code_rules(a)
     A, U = a[a["answerable"]], a[~a["answerable"]]
     given = A[~A["abstained"]]
     out = {"questions": len(a), "answerable": len(A), "unanswerable": len(U),
@@ -142,13 +194,19 @@ def summarize(a: pd.DataFrame) -> dict:
            "abstained_on_answerable": float(A["abstained"].mean()),
            "retrieved_gold_section": float(A["retrieved_gold"].mean()),
            "cites_gold_when_answering": float(given["cites_gold"].mean()) if len(given) else np.nan,
-           "closed_book_abstained_on_unanswerable": float(U["closed_book_abstained"].mean())}
+           "closed_book_abstained_on_unanswerable": float(U["closed_book_abstained"].mean())} | cost_summary(a)
     if "judge_correct" in a:
         out |= {"judge_correct_answerable": float(A["judge_correct"].mean()),
                 "judge_faithful_when_answering": float(given["judge_faithful"].mean()) if len(given) else np.nan,
                 "closed_book_judge_correct_answerable": float(A["closed_book_judge_correct"].mean()),
                 "judge_correct_all": float(a["judge_correct"].mean()),
-                "closed_book_judge_correct_all": float(a["closed_book_judge_correct"].mean())}
+                "closed_book_judge_correct_all": float(a["closed_book_judge_correct"].mean()),
+                # judge_correct counts a decline on an answerable question as graded; strict scores it 0
+                "correct_strict_answerable": float(A["correct_strict"].mean()),
+                "closed_book_correct_strict_answerable": float(A["closed_book_correct_strict"].mean()),
+                "judge_faithful_overridden_on_declines": int(
+                    ((a["abstain_kind"] == "exact") & (a["judge_faithful_raw"] != 1)).sum()),
+                "prose_declines": int((a["abstain_kind"] == "prose").sum())}
     return out
 
 
@@ -200,12 +258,13 @@ def _run(cfg: Config, llm, use_judge: bool, retrieval_only: bool, judge_only: bo
 def calibrate(cfg: Config) -> dict:
     """Agreement between the LLM judge and your labels, on the rows you labeled."""
     h = pd.read_csv(cfg.path("human_labels"))
-    a = pd.read_csv(cfg.reports / "answers.csv")
+    a = code_rules(pd.read_csv(cfg.reports / "answers.csv"))
     h = h.dropna(subset=["human_correct"])
     # labels only count for the exact answer that was labeled; a later run may have produced a different answer
     d = a.merge(h[["id", "answer", "human_correct", "human_faithful"]], on=["id", "answer"])
     out = {"labeled": len(h), "matched_to_current_answers": len(d)}
-    for j, hcol in (("judge_correct", "human_correct"), ("judge_faithful", "human_faithful")):
+    for j, hcol in (("judge_correct", "human_correct"), ("correct_strict", "human_correct"),
+                    ("judge_faithful", "human_faithful")):
         x = d.dropna(subset=[hcol])
         if len(x):
             jb, hb = (x[j] >= 0.5).astype(int), (x[hcol].astype(float) >= 0.5).astype(int)
@@ -232,12 +291,13 @@ def _chart(res: dict, cfg: Config) -> None:
     plt.rcParams.update({"figure.facecolor": "#fcfcfb", "axes.facecolor": "#fcfcfb", "axes.edgecolor": "#e4e3df",
                          "axes.grid": True, "grid.color": "#e4e3df", "axes.spines.top": False,
                          "axes.spines.right": False, "axes.titleweight": "bold", "axes.titlelocation": "left"})
-    cols = {"bm25": "#eb6834", "dense": "#52514e", "hybrid": "#2a78d6"}
+    cols = {"bm25": "#eb6834", "dense": "#52514e", "hybrid": "#2a78d6", "rerank": "#0f3f73"}
     r = res["retrieval"]
     fig, ax = plt.subplots(figsize=(6.5, 3.6))
-    w = 0.25
+    n = len(cfg["retrievers"])
+    w = 0.8 / n
     for i, m in enumerate(cfg["retrievers"]):
-        ax.bar(np.arange(len(KS)) + (i - 1) * w, [100 * r[m][f"recall@{k}"] for k in KS], w, label=m,
+        ax.bar(np.arange(len(KS)) + (i - (n - 1) / 2) * w, [100 * r[m][f"recall@{k}"] for k in KS], w, label=m,
                color=cols.get(m))
     ax.set_xticks(range(len(KS)), [f"top {k}" for k in KS])
     ax.set_ylabel("% of questions with a gold section retrieved")

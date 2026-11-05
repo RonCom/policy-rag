@@ -12,14 +12,17 @@ with/without comparison, where both sides are judge grades so they are measured 
 from __future__ import annotations
 
 import json
+import logging
 
 import numpy as np
 import pandas as pd
 
 from .config import Config
 
+log = logging.getLogger(__name__)
+
 STYLES = {"exact": "Manual wording", "paraphrase": "Paraphrased", "plain": "Plain language"}
-C = {"bm25": "#eb6834", "dense": "#52514e", "hybrid": "#2a78d6", "good": "#2a78d6", "partial": "#9cc3ee",
+C = {"bm25": "#eb6834", "dense": "#52514e", "hybrid": "#2a78d6", "rerank": "#0f3f73", "good": "#2a78d6", "partial": "#9cc3ee",
      "bad": "#eb6834", "miss": "#8c2d0a", "muted": "#b9b8b3", "ink": "#2b2a27"}
 
 
@@ -51,17 +54,18 @@ def retrieval_by_style(cfg: Config, plt) -> None:
     qs = pd.read_json(cfg.path("eval_questions"), lines=True)
     n = qs[qs["answerable"]]["style"].value_counts()
     fig, ax = plt.subplots(figsize=(6.8, 3.4))
-    w = 0.26
-    for i, m in enumerate(cfg["retrievers"]):
+    ms = [m for m in cfg["retrievers"] if m in r]          # eval.json may predate a retriever added to config
+    w = 0.8 / len(ms)
+    for i, m in enumerate(ms):
         vals = [100 * r[m][s] for s in STYLES]
-        bars = ax.bar(np.arange(3) + (i - 1) * w, vals, w, label=m, color=C[m])
+        bars = ax.bar(np.arange(3) + (i - (len(ms) - 1) / 2) * w, vals, w, label=m, color=C[m])
         ax.bar_label(bars, [f"{v:.0f}" for v in vals], fontsize=7, padding=2)
     ax.set_xticks(range(3), [f"{v}\n(n = {n.get(k, 0)})" for k, v in STYLES.items()])
     ax.set_ylim(0, 125)
     ax.set_yticks(range(0, 101, 20))
     ax.set_ylabel("% with gold section in top 5")
     ax.set_title("Retrieval holds up on the manuals' wording, not on everyday wording")
-    ax.legend(frameon=False, ncol=3, loc="upper right", fontsize=8)
+    ax.legend(frameon=False, ncol=len(ms), loc="upper right", fontsize=8)
     fig.savefig(cfg.reports / "figures" / "retrieval_by_style.png", dpi=170, bbox_inches="tight")
     plt.close(fig)
 
@@ -165,10 +169,14 @@ def judge_calibration(a: pd.DataFrame, cfg: Config, plt) -> None:
 
 def run(cfg: Config) -> list[str]:
     plt = _style()
-    a = graded(cfg)
     retrieval_by_style(cfg, plt)
-    answer_outcomes(a, cfg, plt)
-    if "closed_book_judge_correct" in a:
-        rag_vs_closed_book(a, cfg, plt)
-    judge_calibration(a, cfg, plt)
+    if "judge_correct" in pd.read_csv(cfg.reports / "answers.csv", nrows=0).columns:
+        a = graded(cfg)
+        answer_outcomes(a, cfg, plt)
+        if "closed_book_judge_correct" in a:
+            rag_vs_closed_book(a, cfg, plt)
+        judge_calibration(a, cfg, plt)
+    else:                                  # answers.csv from `eval --no-judge`: the three answer-grade figures need grades
+        log.warning("answers.csv has no judge grades; drew retrieval_by_style only. "
+                    "Run `uv run policy-rag eval --judge-only`, then `figures` again.")
     return sorted(p.name for p in (cfg.reports / "figures").glob("*.png"))

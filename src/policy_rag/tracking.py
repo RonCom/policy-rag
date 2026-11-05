@@ -41,7 +41,26 @@ def lineage(cfg: Config) -> dict:
         commit = "none"
     return {"eval_set_sha": sha(qfile.read_bytes()), "eval_questions": sum(1 for _ in open(qfile, encoding="utf-8")),
             "answer_prompt_sha": answer.PROMPT_SHA, "judge_prompt_sha": sha(evaluate.JUDGE_SYSTEM),
-            "git_commit": commit}
+            "git_commit": commit} | runtime(cfg)
+
+
+def runtime(cfg: Config) -> dict:
+    """Ollama version and the digest of each model the run uses.
+
+    Same prompt hashes at temperature 0 still produced different answers after a model re-pull, so the weights and
+    the server version are part of what a metric depends on. "unavailable" when no server answers (tests, --fake).
+    """
+    import requests
+    url = cfg["ollama_url"].rstrip("/")
+    try:
+        version = requests.get(f"{url}/api/version", timeout=5).json().get("version", "unknown")
+        tags = {m["name"]: m.get("digest", "")[:12] for m in requests.get(f"{url}/api/tags", timeout=5).json()["models"]}
+    except (requests.RequestException, ValueError, KeyError):
+        return {"ollama_version": "unavailable"}
+
+    def digest(name: str) -> str:
+        return tags.get(name) or tags.get(f"{name}:latest") or "missing"
+    return {"ollama_version": version} | {f"{k}_digest": digest(cfg[k]) for k in ("chat_model", "judge_model", "embed_model")}
 
 
 def feedback(trace_id, name: str, value, source: str, source_id: str, rationale: str | None = None) -> None:
