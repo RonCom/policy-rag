@@ -53,11 +53,13 @@ def main() -> None:
         idx = Index(cfg, llm)
         tracking.setup(cfg, "policy-rag")
         r, hits = answer.rag(idx, llm, cfg["chat_model"], a.question, a.retriever or cfg["answer_retriever"],
-                             cfg["top_k"])
+                             cfg["top_k"], cfg.get("pricing"))
         print("\n" + r["answer"] + "\n")
         for i, h in enumerate(hits.itertuples(), start=1):
             print(f"[{i}] {h.doc} {h.section} {h.heading} (p. {h.page})")
-        print(f"\ntrace: {r['trace_id']} (uv run mlflow ui --backend-store-uri sqlite:///mlflow.db)")
+        print(f"\n{r['latency_ms'] / 1000:.1f} s (retrieve {r['retrieve_ms']:.0f} ms, generate {r['generate_ms']:.0f} ms) | "
+              f"{r['prompt_tokens']} tokens in, {r['completion_tokens']} out | ${r['cost_usd']:.4f}")
+        print(f"trace: {r['trace_id']} (uv run mlflow ui --backend-store-uri sqlite:///mlflow.db)")
     elif a.step == "eval":
         print(json.dumps(evaluate.run(cfg, llm, not a.no_judge, a.retrieval_only, a.judge_only), indent=2, default=float))
     elif a.step == "calibrate":

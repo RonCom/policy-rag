@@ -29,9 +29,11 @@ Save the four PDFs to `data/docs/` (git-ignored).
    section heading only if it is one of the next few entries in the manual's table of contents; this stops
    cross-references such as "see 220.2 - Reasonable and Necessary ...)" from splitting a section. The result is
    851 chunks across 304 sections.
-2. **Three retrievers** (`retrieve.py`): BM25 (exact tokens such as CPT codes, "modifier 59", "8 minutes"), dense
-   embeddings (`nomic-embed-text` via Ollama, for paraphrased questions), and hybrid (reciprocal rank fusion).
-   Vectors live in DuckDB.
+2. **Four retrievers** (`retrieve.py`): BM25 (exact tokens such as CPT codes, "modifier 59", "8 minutes"), dense
+   embeddings (`nomic-embed-text` via Ollama, for paraphrased questions), hybrid (reciprocal rank fusion), and
+   rerank: hybrid's top 20 candidates re-scored by a cross-encoder (`cross-encoder/ms-marco-MiniLM-L-6-v2`, CPU).
+   BM25 and embeddings score the question and each chunk separately; a cross-encoder reads them together, which
+   is the check the plain-language misses below call for. Vectors live in DuckDB.
 3. **Grounded answers** (`answer.py`): a local model answers only from the numbered excerpts, cites each claim
    `[n]`, and replies `NOT IN DOCUMENTS` when the excerpts don't cover the question.
 4. **Evaluation** (`evaluate.py`), on 62 questions in `eval/questions.jsonl`: 50 answerable, each with a reference
@@ -48,15 +50,18 @@ Save the four PDFs to `data/docs/` (git-ignored).
    Runs are logged to MLflow, and each answer is an MLflow trace (see [MLOps](#mlops-mlflow-and-evidently)).
 5. **Judge calibration** (`policy-rag calibrate`): an LLM judge is only useful if it agrees with a person. `eval`
    writes `eval/human_labels.csv`; label a sample yourself (`human_correct` 0/0.5/1, `human_faithful` 0/1) and
-   `calibrate` reports agreement and Cohen's kappa.
+   `calibrate` reports agreement and Cohen's kappa. Two rubric rules the eval set decides exactly run in code after
+   the judge (`evaluate.code_rules`): an exact NOT IN DOCUMENTS decline is faithful, and a decline on an answerable
+   question scores 0 (`correct_strict`), whether it's the exact reply or written as prose in the first sentence
+   (`answer.declined`). The judge's own grade stays in `judge_correct`.
 6. **Retrieval sweep** (`sweep.py`): chunk size x overlap x retriever, as nested MLflow runs, with a selection rule
    stated before the run.
 7. **Feature ablation** (`ablation.py`): removes one retrieval feature at a time to measure what each is worth.
 8. **Monitoring** (`monitor.py`): Evidently drift reports on label-free retrieval signals, comparing incoming
    questions with the evaluated ones, plus a review queue of low-confidence queries.
 
-The questions were drafted from the manual text (with Claude) and checked against the source sections; each
-unanswerable topic was confirmed absent from the corpus by searching the chunk text.
+The questions were drafted from the manual text and checked against the source sections; each unanswerable topic
+was confirmed absent from the corpus by searching the chunk text.
 
 ## Run it
 
@@ -69,6 +74,7 @@ ollama pull gemma4:e4b            # answers (fits 8 GB of VRAM)
 
 uv sync
 uv run policy-rag index           # parse, chunk, embed -> data/index.duckdb
+uv run policy-rag eval --retrieval-only  # BM25, dense, hybrid, rerank; no chat model needed
 uv run policy-rag ask "How many units can be billed for 40 minutes of 97110 and 97140?"
 uv run policy-rag eval --no-judge # answers + retrieval, abstention, citations (no judge model)
 uv run policy-rag eval --judge-only  # grade those saved answers with the judge model (slow on 8 GB VRAM)
@@ -80,11 +86,14 @@ uv run pytest -q
 uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
 ```
 
-`--fake` runs any command without Ollama (hash embeddings, canned replies), for tests and dry runs.
+`--fake` runs any command without Ollama (hash embeddings, canned replies, a token-overlap stand-in for the
+reranker), for tests and dry runs. The reranker downloads its model (about 90 MB) from Hugging Face on first use and
+runs on CPU; `uv sync` installs `sentence-transformers` and PyTorch for it.
 
 ## Results
 
-Models: `nomic-embed-text` (embeddings), `gemma4:e4b` (answers), `gemma4:26b` (judge), all local through Ollama.
+Models: `nomic-embed-text` (embeddings), `gemma4:e4b` (answers), `gemma4:26b` (judge), all local through Ollama;
+`cross-encoder/ms-marco-MiniLM-L-6-v2` (rerank) on CPU through sentence-transformers.
 62 questions: 50 answerable (27 phrased like the manuals, 13 paraphrased, 10 in plain reviewer language) and 12 the
 manuals do not answer. Retrieval returns the top 5 excerpts.
 
@@ -95,6 +104,18 @@ manuals do not answer. Retrieval returns the top 5 excerpts.
 | BM25 | 76% | 88% | 0.81 | 100% | 40% |
 | Dense (`nomic-embed-text`) | 70% | 90% | 0.79 | 95% | **70%** |
 | **Hybrid (RRF)** | **76%** | **92%** | **0.83** | 100% | 60% |
+| Rerank (cross-encoder over hybrid's top 20) | 72% | 94% | 0.81 | 100% | 70% |
+
+Rerank vs. hybrid at top 5: +2 points (95% CI −4 to +8). Rule, set before the run: `answer_retriever` switches to
+rerank only if that interval is above zero. It isn't, so hybrid stays the default. The cross-encoder found one more
+plain-language question (7 of 10 vs. 6) and moved two correct sections out of first place (top 1: 72% vs. 76%).
+
+Retrieval recall isn't answer quality, so rerank also got an answer-level test, with its rule written before the
+run: switch only if judged correctness on the 50 answerable questions rises with a paired bootstrap 95% CI above
+zero, with no more false declines. Both retrievers scored 84% on the judge alone (difference +0.00, CI −0.09 to +0.09); with the decline rule, hybrid
+scores 80% and rerank at most 80%, since its two extra false declines (p03, p10) lose the judge's credit. Rerank changed
+the grade on 11 questions, 6 better and 5 worse; it fixed p02 (a 5-minute service, now correctly not billable) and
+added a false decline (3 of 50 vs. 2). Hybrid stays the answer retriever. Both runs are in MLflow.
 
 Questions written in the manuals' own words are easy for keyword search; plain-language questions are where it
 breaks (40%) and embeddings earn their place (70%). Hybrid keeps BM25's precision on exact terms and most of the
@@ -115,60 +136,79 @@ needs more questions before dense and hybrid can be told apart.
 
 | | With retrieval | Same model, no documents |
 |---|---|---|
-| Judged correct, answerable questions | **84%** | 50% |
+| Correct, answerable questions (judge + decline rule) | **80%** | 1% |
+| Judge alone, answerable questions | 84% | 53% |
 | Declined the 12 questions the manuals do not answer | **12 / 12** | 9 / 12 (answered 3 from memory, unsourced) |
-| Declined an answerable question | 3 / 50 | – |
-| Cited a gold section when answering | 89% | – |
-| Judged faithful to the excerpts | 100% | – |
+| Declined an answerable question | 3 / 50 (one in prose) | – |
+| Cited a gold section when answering | 88% | – |
+| Faithful to the excerpts (judge) | 96% | – |
 
-Retrieval is what makes the model usable: it raises correctness from 50% to 84%, and every claim it makes is tied to
-a cited section. Without the documents, the model answered 3 out-of-scope questions from general knowledge, with
+Retrieval is what makes the model usable: it raises correctness from 1% to 80%, and every claim it makes is tied to
+a cited section. The judge alone put the model without documents at 53% because it passed every decline: in the
+first graded run, the model alone declined 25 of the 50 answerable questions, the judge passed all 25, and it
+failed all 25 answers the model did give. Without the documents, the model answered 3 out-of-scope questions from general knowledge, with
 nothing a reviewer could check.
 ![Answer grades split by whether retrieval found the gold section](reports/figures/answer_outcomes.png)
 
-*What it shows:* 11 of the 50 answerable questions fall short of fully correct (grades are my label where I
-labeled the answer, the judge's otherwise). Four are retrieval misses, all on plain-language questions, and all
-four answers were wrong: two answered confidently from the wrong section (e.g. "does Medicare stop paying once the
-patient stops improving?" retrieved a notification section instead of §220.2's maintenance rule, and the model
-said "yes"), two declined. The other seven had the right section in hand: five partial answers that left out a
-secondary fact (such as the 14-day rule for verbal certifications), one false decline and one misreading.
-Plain-language questions score 45%; the other 40 score 92-93%.
+*What it shows:* 14 of the 50 answerable questions fall short of fully correct (grade: my label where it matches
+the answer, otherwise the judge with declines on answerable questions scored 0). Retrieval missed on four questions, all
+plain-language, and all four ended wrong. p05 declined. p09 declined in prose ("the excerpts do not provide a
+specific answer"); the judge passed it, and the decline rule scores it 0. p06 and p08 answered from the wrong
+section (p06, "does Medicare stop paying once the patient stops improving?", retrieved a notification section
+instead of §220.2's maintenance rule and said "yes"). The other ten short answers had the right section in hand: eight partial answers that left out a
+secondary fact (the 14-day rule for verbal orders, the 30-day cancellation notice, the 53-minute threshold for a
+fourth unit), one false decline (q15) and one misreading (p02 said 15 minutes where the rule is 8). Manual wording
+scores 91%, paraphrased 88%, plain language 40%.
 
-*What it decides:* a retrieval miss turned into a wrong answer 4 times out of 4, so retrieval is the first thing
-to tune (the sweep below). More points are lost with the right section retrieved, though, so the next lever is the
-answer step. One hypothesis to test: the prompt limits answers to 1-4 sentences, which may be what drops secondary
-facts. Testing it needs the judge on every answer, so it is an eval run compared on `answer_prompt_sha` in MLflow,
-not part of the retrieval sweep.
+*What it decides:* a retrieval miss ended in a wrong answer 4 times out of 4, so retrieval is the first thing to tune
+(the sweep below). More points are lost with the right section retrieved, though, so the next lever is the answer
+step. One hypothesis to test: the prompt limits answers to 1-4 sentences, which may be what drops secondary facts.
+Testing it needs the judge on every answer, so it is an eval run compared on `answer_prompt_sha` in MLflow, not
+part of the retrieval sweep.
 
 ![With and without the manuals, by question wording, and on out-of-scope questions](reports/figures/rag_vs_closed_book.png)
 
-*What it shows* (judge grades on both sides): retrieval lifts manual-wording questions from 63% to 93% and
-paraphrased ones from 15% to 92%, and keeps all 12 out-of-scope questions declined (the model alone answered 3
-without a source). On plain-language questions the gain disappears: 50% with the manuals, 60% without. That is one
-question apart on ten, but the direction matters. When retrieval misses, the system answers from the wrong section
-*with a citation*, which looks more trustworthy than an unsourced guess.
+*What it shows* (judge plus decline rule on both sides): retrieval lifts manual-wording questions from 0% to 91%,
+paraphrased ones from 0% to 88% and plain-language ones from 5% to 40%, and keeps all 12 out-of-scope questions
+declined (the model alone answered 3 without a source). Without the manuals, the model declined 26 of the 50
+answerable questions and got 23 of its 24 answers wrong (one partial). Plain language is where retrieval is weakest,
+and when it misses, the system answers from the wrong section *with a citation* (p06, p08), which looks more
+trustworthy than an unsourced guess.
 
 *What it decides:* retrieval stays; it carries 40 of 50 answerable questions and the scope control. For everyday
 questions, retrieval has to improve before the answers can be trusted. A candidate guard for later, to be tested
 on the eval set first: when the monitoring signals say retrieval is unsure, decline or flag instead of answering.
 
-**Judge calibration** (37 answers labeled by hand, chosen to include errors, partial answers and declines)
+**Judge calibration** (37 answers labeled by hand, chosen to include errors, partial answers and declines; a label
+counts only against the exact answer it labeled, so the rerun is scored on the 20 whose answers came out unchanged)
 
-| | Agreement with human | Cohen's kappa | Judge pass rate | Human pass rate |
-|---|---|---|---|---|
-| Correctness | 92% (34 / 37) | **0.68** | 86% | 84% |
-| Faithfulness | 97% (36 / 37) | not informative* | 97% | 100% |
+| | Labels matched | Agreement with human | Cohen's kappa | Judge pass rate | Human pass rate |
+|---|---|---|---|---|---|
+| Correctness, judge alone, first run | 37 | 92% (34 / 37) | 0.68 | 86% | 84% |
+| Correctness, judge + decline rule, first run | 37 | 97% (36 / 37) | **0.91** | 81% | 84% |
+| Correctness, judge alone, rerun | 20 | 95% (19 / 20) | 0.77 | 90% | 85% |
+| Correctness, judge + decline rule, rerun | 20 | 100% (20 / 20) | 1.00 | 85% | 85% |
+| Faithfulness, judge + decline rule, first run | 37 | 100% (37 / 37) | not informative* | 100% | 100% |
+| Faithfulness, judge + decline rule, rerun | 20 | 100% (20 / 20) | not informative* | 100% | 100% |
 
 \* Every labeled answer was faithful by the human rubric, so kappa has no variance to measure; agreement is the
-useful number. The correctness judge is trustworthy enough to report (kappa above 0.6), with one systematic
-leniency worth knowing: it accepted two "NOT IN DOCUMENTS" replies because the retrieved excerpts lacked the answer,
-although the manuals contain it. The judge grades against what was retrieved, so retrieval misses can look like
-correct declines; the deterministic "retrieved a gold section" check catches those cases.
+useful number. The judge alone has one systematic leniency: it passes "NOT IN DOCUMENTS" whenever the excerpts it
+sees lack the answer, even when the manuals contain it. It grades against what was retrieved, so a retrieval miss
+looks like a correct decline. Two of its three disagreements with my labels in the first run were such declines,
+all three false declines in the rerank answer test (p05 under hybrid, p03 and p10 under rerank) were graded fully
+correct, every closed-book decline passed, and so did p09, which declined in prose. Whether a question is answerable is fixed by the eval set, so the
+rule moved into code: a decline on an answerable question scores 0. With it, agreement with my labels rose from
+kappa 0.68 to 0.91 on all 37 labels and from 0.77 to 1.00 on the 20 that match the rerun (20 labels is a small
+sample). The faithfulness rule fixed one rubric break: the judge scored a decline (q15) unfaithful, and the rubric
+says a decline is faithful. `judge_faithful_overridden_on_declines` in `eval.json` counts those overrides, and
+`prose_declines` counts declines caught in prose.
 
-![LLM judge vs human grades on 37 answers](reports/figures/judge_calibration.png)
+![LLM judge vs human grades on the 20 labeled answers that match the rerun](reports/figures/judge_calibration.png)
 
-*What it shows:* 34 of 37 agree on pass/fail. Two of the three disagreements go the same way: the judge passed
-"NOT IN DOCUMENTS" replies that followed a retrieval miss. The third goes the other way (judge 0, human 1).
+*What it shows:* on the rerun, 19 of 20 agree on correctness; in the one disagreement the judge passed an answer I
+failed. On faithfulness the judge failed one answer I labeled faithful. In the first run, 34 of 37 agreed, and two
+of the three disagreements went the same way: the judge passed "NOT IN DOCUMENTS" replies that followed a
+retrieval miss. The 17 changed answers are unlabeled until I label them.
 
 *What it decides:* the judge grades correctness at scale, and every decline is cross-checked against the
 deterministic gold-section check; both scores sit on the same MLflow trace for that reason. The calibration
@@ -195,6 +235,7 @@ each).
 | Stopwords (incl. "may", "must", "shall") | Removed before keyword scoring | Common words carry no topic | None: 1 question lost, 1 gained. |
 | Embedding task prefixes | `search_query:` / `search_document:` for `nomic-embed-text` | The model was trained with them | Embedding search did slightly *better* without them: 90% -> 92% (1 question gained, none lost; 95% CI 0 to +6), top 1 70% -> 74%, plain language 70% -> 80%. Within noise; top 1 and top 5 both rose, top 3 was unchanged and top 10 fell (96% -> 94%). |
 | Reciprocal rank fusion | Combine keyword and embedding rankings by rank, not score | BM25 scores and cosine similarities are on different scales; ranks need no calibration | Hybrid 92% vs BM25 88% and dense 90% (vs BM25: +4 points, 95% CI 0 to +10). |
+| Cross-encoder rerank | Re-score hybrid's top 20 with a model that reads the question and chunk together | Separate scoring missed plain-language questions whose words differ from the manual's | Measured as a fourth retriever: top 5 94% vs. hybrid 92% (+2 points, 95% CI −4 to +8), plain language 70% vs. 60%, top 1 72% vs. 76%. Within noise; hybrid stays the answer retriever. |
 | Chunk size and overlap | 300 words, 40 overlap | A first guess | Tested by `policy-rag sweep`. |
 | Monitoring signals | 8 label-free per-query features (see [MLOps](#mlops-mlflow-and-evidently)) | No labels exist in use | Each must predict a retrieval miss or out-of-scope question (AUC >= 0.65) before it can flag a query. All six confidence signals pass; the best embedding match is strongest (AUC 0.89 for misses, 0.97 for out-of-scope). |
 
@@ -216,7 +257,7 @@ recall alone.
 
 Two questions matter once a RAG system leaves the notebook: *which configuration is in use and why*, and *is it
 still working on the questions people actually ask*. MLflow answers the first, Evidently the second. The choices
-below are about keeping both honest at this scale (one person, a laptop, 62 labeled questions).
+below are about keeping both trustworthy at this scale (one person, a laptop, 62 labeled questions).
 
 ### MLflow: what is tracked, and why
 
@@ -225,8 +266,13 @@ below are about keeping both honest at this scale (one person, a laptop, 62 labe
 | Every eval run | experiment `policy-rag`: models, chunking, top-k as params; retrieval and answer metrics; `answers.csv`, `eval.json`, the recall chart, the question file and both prompts as artifacts | A metric without its settings can't be reproduced or compared. |
 | Lineage | params `eval_set_sha`, `answer_prompt_sha`, `judge_prompt_sha`, `git_commit` | The question set grew from 52 to 62 during development. Two runs are only comparable when the hashes match; without them, "84% vs 80%" might just mean different questions. |
 | Each answer | an MLflow **trace**: `rag` -> `retrieve` (the five excerpts with section, page, rank, score) -> `generate` (prompt version, reply) | When an answer is wrong, the trace shows whether retrieval missed the section or the model misread it. Most errors here were retrieval misses, and the trace makes that visible per question. |
+| Cost of each answer | on the trace: `latency_ms` per step and in total; on `generate`, input and output tokens (`mlflow.chat.tokenUsage`, which MLflow sums per trace), Ollama's load, prompt and generation times, tokens per second, and USD (`mlflow.llm.cost`) from the `pricing` table in `config.yaml`. `answers.csv` gets the same columns; eval logs p50/p95 latency, mean tokens and total cost as metrics | A change to the prompt, top-k or reranker moves accuracy and cost together, and the run has to show both. Local models cost $0 and stay out of `pricing`; a hosted model gets a row and its traces are priced. Model load time is reported apart (`latency_p95_excl_load_s`) because Ollama reloads weights after going idle, and that lands on whichever question comes first. |
 | Scores on traces | `retrieved_gold_section` / `declined_out_of_scope` (source CODE), `judge_correct` / `judge_faithful` with the judge's reason (LLM_JUDGE), and my labels from `calibrate` (HUMAN) | All three kinds of evidence sit on the same answer, so a judge-vs-human disagreement can be opened and read in one place. |
 | Retrieval sweep | experiment `policy-rag-sweep`: one parent run, a nested child run per chunk size x overlap x retriever, per-question ranks as an artifact | Chunk size was a guess (300 words). The sweep tests it instead of defending it. |
+
+Per answer, on the hybrid run (62 questions, `gemma4:e4b` on an 8 GB laptop GPU): p50 10.3 s, p95 13.2 s (12.6 s
+without model load); generation is 11.1 s of the p95 and retrieval 2.1 s. Answers average 2,147 prompt tokens and
+562 completion tokens (Ollama's `eval_count`, which includes any thinking tokens), at $0 for a local model.
 
 Decisions:
 
@@ -244,7 +290,7 @@ Decisions:
   is trained, so a registry would hold nothing; the "model" is a set of Ollama tags, a prompt and a chunking
   setting, which are logged as parameters and hashes.
 - **Keep the calibrated judge rather than a built-in one.** MLflow ships LLM-judge scorers, but the judge here has
-  been calibrated against my labels (kappa 0.68). Swapping it would throw that away.
+  been calibrated against my labels (kappa 0.91 with the decline rule in code). Swapping it would throw that away.
 
 ### Evidently: monitoring without labels
 
@@ -358,9 +404,17 @@ which `monitor --answers` tracks as an abstain rate.
 
 ### Reproducibility
 
-Rerunning the full eval (answers, judge, calibration) reproduced every metric, and all 37 hand labels matched
-the regenerated answers word for word. Generation runs at temperature 0, so labels stay valid across reruns as
-long as the prompt and model hashes in MLflow are unchanged.
+The first full rerun (answers, judge, calibration) reproduced every metric, and all 37 hand labels matched the
+regenerated answers word for word. A later rerun with the same prompt hashes, still at temperature 0, changed 35
+of 62 answers and 28 of 62 closed-book answers. Judged correctness held at 84%; the closed-book baseline moved from 50% to
+53%, false declines from 3 to 2 of 50, and judged faithfulness from 100% to 96%. With the decline rule, correctness
+held at 80% and the closed-book baseline moved from 0% to 1%. The closed-book answers involve no
+retrieval and changed too, which points at the answer model or the Ollama server; the graded run was committed on
+2026-10-01, and the rerun used Ollama 0.35.1 with `gemma4:e4b` digest `dc35e8d9c606`. Earlier runs logged neither,
+so the two can't be compared directly. Runs now log `ollama_version` and each model's digest (`chat_model_digest`,
+`judge_model_digest`, `embed_model_digest`) as MLflow params. Matching prompt hashes don't make labels reusable.
+`scripts/reuse_judge.py` copies judge grades only to answers whose text is identical to the graded run's and sends
+the rest to the judge; `calibrate` likewise counts a hand label only against the exact answer it labeled.
 
 Outputs: `reports/sweep.json`, `reports/figures/sweep.png`, `reports/monitoring/monitor.json`,
 `reports/figures/monitoring.png`; everything is also in MLflow (`uv run mlflow ui --backend-store-uri sqlite:///mlflow.db`).

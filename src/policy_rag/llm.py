@@ -1,4 +1,8 @@
-"""Model access: Ollama's local HTTP API, plus a deterministic fake backend for tests and offline dry runs."""
+"""Model access: Ollama's local HTTP API, plus a deterministic fake backend for tests and offline dry runs.
+
+Each chat call leaves its token counts and Ollama's timings in `last_usage`, so the caller can put them on the trace
+without changing what `chat` returns.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -10,11 +14,14 @@ import requests
 
 from .config import Config
 
+NS_PER_MS = 1e6
+
 
 class Ollama:
     def __init__(self, cfg: Config):
         self.url = cfg["ollama_url"].rstrip("/")
         self.embed_model, self.temperature = cfg["embed_model"], cfg["temperature"]
+        self.last_usage: dict = {}
 
     def embed(self, texts: list[str], kind: str) -> np.ndarray:
         # nomic-embed-text expects task prefixes ("raw" = none, for the ablation); other models ignore them
@@ -35,13 +42,27 @@ class Ollama:
             body["format"] = schema                          # Ollama structured outputs (JSON schema)
         r = requests.post(f"{self.url}/api/chat", json=body, timeout=900)
         r.raise_for_status()
-        return r.json()["message"]["content"]
+        j = r.json()
+        self.last_usage = usage(j)
+        return j["message"]["content"]
+
+
+def usage(reply: dict) -> dict:
+    """Token counts and timings from an Ollama /api/chat reply (durations arrive in nanoseconds)."""
+    pt, ct = int(reply.get("prompt_eval_count") or 0), int(reply.get("eval_count") or 0)
+    ms = {k: float(reply.get(f"{k}_duration") or 0) / NS_PER_MS for k in ("total", "load", "prompt_eval", "eval")}
+    return {"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": pt + ct,
+            "ollama_total_ms": ms["total"], "load_ms": ms["load"], "prompt_eval_ms": ms["prompt_eval"],
+            "eval_ms": ms["eval"], "tokens_per_s": ct / (ms["eval"] / 1000) if ms["eval"] else 0.0}
 
 
 class Fake:
     """Hash-based embeddings and a canned chat reply; lets the pipeline and tests run without a model server."""
 
     dim = 256
+
+    def __init__(self):
+        self.last_usage: dict = {}
 
     def embed(self, texts, kind):
         v = np.zeros((len(texts), self.dim), np.float32)
@@ -52,9 +73,14 @@ class Fake:
 
     def chat(self, model, system, user, schema=None):
         if schema:
-            return json.dumps({"correct": 1, "faithful": 1, "reason": "fake judge"})
-        m = re.search(r"\[(\d+)\]", user)
-        return f"See the cited policy [{m.group(1) if m else 1}]."
+            reply = json.dumps({"correct": 1, "faithful": 1, "reason": "fake judge"})
+        else:
+            m = re.search(r"\[(\d+)\]", user)
+            reply = f"See the cited policy [{m.group(1) if m else 1}]."
+        # word counts stand in for tokens so the tracing path runs end to end in tests
+        self.last_usage = usage({"prompt_eval_count": len((system + " " + user).split()),
+                                 "eval_count": len(reply.split())})
+        return reply
 
 
 def client(cfg: Config, fake: bool = False):

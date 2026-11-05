@@ -133,7 +133,7 @@ def _chart(t: pd.DataFrame, cfg: Config, current: tuple) -> None:
     plt.rcParams.update({"figure.facecolor": "#fcfcfb", "axes.facecolor": "#fcfcfb", "axes.edgecolor": "#e4e3df",
                          "axes.grid": True, "grid.color": "#e4e3df", "axes.spines.top": False,
                          "axes.spines.right": False, "axes.titleweight": "bold", "axes.titlelocation": "left"})
-    cols = {"bm25": "#eb6834", "dense": "#52514e", "hybrid": "#2a78d6"}
+    cols = {"bm25": "#eb6834", "dense": "#52514e", "hybrid": "#2a78d6", "rerank": "#0f3f73"}
     fig, axes = plt.subplots(1, 2, figsize=(9, 3.4), sharey=True)
     for ax, metric, title in ((axes[0], "recall_at_5", "All answerable (top 5)"),
                               (axes[1], "plain_recall_at_5", "Plain-language questions (top 5)")):

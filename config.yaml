@@ -19,9 +19,15 @@ judge_model: gemma4:26b            # grading: a larger model than the one being 
 temperature: 0
 
 # ---- Retrieval and answering ----------------------------------------------------------
-retrievers: [bm25, dense, hybrid]
+retrievers: [bm25, dense, hybrid, rerank]
 top_k: 5
+# retrieval test (2026-11-04): rerank_minus_hybrid recall@5 +0.02, CI [-0.04, +0.08] -> did not switch
+# answer test (written before running): switch to rerank only if judged correctness on the 50 answerable
+# questions rises with a paired bootstrap 95% CI above 0, with no more false declines and 12/12 out-of-scope declined
 answer_retriever: hybrid
+rerank:                            # cross-encoder over hybrid's top candidates (sentence-transformers, CPU is enough)
+  model: cross-encoder/ms-marco-MiniLM-L-6-v2
+  candidates: 20
 
 # ---- Evaluation ---------------------------------------------------------------------------
 eval_questions: eval/questions.jsonl

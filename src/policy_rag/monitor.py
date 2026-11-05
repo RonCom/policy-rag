@@ -142,7 +142,7 @@ def run(cfg: Config, llm, with_answers: bool = False, seed: int = 0) -> dict:
     flags["n_flags"] = flags["reasons"].str.split().str.len()
     if with_answers:                                          # optional: run the chat model too (slow)
         tracking.setup(cfg, "policy-rag-monitoring")
-        replies = [ans.rag(idx, llm, cfg["chat_model"], x, cfg["answer_retriever"], cfg["top_k"])[0]
+        replies = [ans.rag(idx, llm, cfg["chat_model"], x, cfg["answer_retriever"], cfg["top_k"], cfg.get("pricing"))[0]
                    for x in cur_q["question"]]
         flags["abstained"] = [r["abstained"] for r in replies]
         flags["answer"] = [r["answer"] for r in replies]

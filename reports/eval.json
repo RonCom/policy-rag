@@ -21,6 +21,13 @@
       "recall@10": 0.96,
       "mrr": 0.8293571428571428
     },
+    "rerank": {
+      "recall@1": 0.72,
+      "recall@3": 0.9,
+      "recall@5": 0.94,
+      "recall@10": 0.96,
+      "mrr": 0.809
+    },
     "hybrid_minus_bm25_recall@5": {
       "est": 0.040000000000000036,
       "ci95": [
@@ -42,6 +49,13 @@
         0.12
       ]
     },
+    "rerank_minus_hybrid_recall@5": {
+      "est": 0.019999999999999907,
+      "ci95": [
+        -0.040000000000000036,
+        0.08000000000000007
+      ]
+    },
     "by_style": {
       "bm25": {
         "exact": 1.0,
@@ -57,6 +71,11 @@
         "exact": 1.0,
         "paraphrase": 1.0,
         "plain": 0.6
+      },
+      "rerank": {
+        "exact": 1.0,
+        "paraphrase": 1.0,
+        "plain": 0.7
       }
     }
   },
@@ -69,10 +88,23 @@
     "retrieved_gold_section": 0.92,
     "cites_gold_when_answering": 0.8936170212765957,
     "closed_book_abstained_on_unanswerable": 0.75,
+    "latency_p50_s": 10.270588900020812,
+    "latency_p95_s": 13.1633797099872,
+    "latency_p95_excl_load_s": 12.616879750030527,
+    "retrieve_p95_ms": 2095.9776649600826,
+    "generate_p95_ms": 11085.622774960939,
+    "prompt_tokens_mean": 2147.3870967741937,
+    "completion_tokens_mean": 561.741935483871,
+    "cost_usd_total": 0.0,
+    "cost_usd_per_answer": 0.0,
     "judge_correct_answerable": 0.84,
-    "judge_faithful_when_answering": 1.0,
-    "closed_book_judge_correct_answerable": 0.5,
+    "judge_faithful_when_answering": 0.9574468085106383,
+    "closed_book_judge_correct_answerable": 0.53,
     "judge_correct_all": 0.8709677419354839,
-    "closed_book_judge_correct_all": 0.5483870967741935
+    "closed_book_judge_correct_all": 0.5725806451612904,
+    "correct_strict_answerable": 0.8,
+    "closed_book_correct_strict_answerable": 0.01,
+    "judge_faithful_overridden_on_declines": 1,
+    "prose_declines": 1
   }
 }
